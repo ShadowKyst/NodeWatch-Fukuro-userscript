@@ -291,7 +291,7 @@
         } else {
             for (const [node, users] of sortedLocations) {
                 const userNames = users.map(user => user.name).join(', ');
-                popupContentHTML += `<p><b>${node}:</b> ${node} - ${userNames}</p>`;
+                popupContentHTML += `<p><b>${node}:</b> ${userNames}</p>`;
             }
         }
         popupContentHTML += '</div>';
