@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      3.5
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location.
-// @author       Farewell Myaku
+// @author       ShadowKyst
 // @match        https://www.fukuro.su/
 // @grant        none
 // ==/UserScript==
@@ -53,6 +53,13 @@
     let isTrackingNode = true;
     let analysisStatusDiv = null;
 
+    // New Node Navigation Variables
+    let goToNodeButton = null;
+    let originalNode = null;     // To store the node before navigation
+    let nodeInput = null;         // Input field for node
+    let currentNodeDisplay = null; // Display current node
+    let goToNodeContainer = null; // Container for GoToNode elements (module-level)
+
     function createOverlay() {
         overlayDiv = document.createElement('div');
         overlayDiv.id = 'websocket-overlay';
@@ -98,7 +105,7 @@
         }
         overlayHistory.forEach(histMessage => {
             const messageDiv = document.createElement('div');
-            messageDiv.textContent = histMessage;
+            messageDiv.textContent = messageText;
             overlayDiv.appendChild(messageDiv);
         });
     }
@@ -152,7 +159,7 @@
 
     function createAnalyzeButton() {
         analyzeButton = document.createElement('button');
-        analyzeButton.textContent = 'Analyze Locations';
+        analyzeButton.textContent = 'Найти РП';
         Object.assign(analyzeButton.style, {
             position: 'fixed',
             top: '10px',
@@ -168,7 +175,8 @@
             fontSize: '15px',
             boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
             transition: 'background-color 0.3s ease',
-            display: 'none'
+            display: 'none',
+            width: '150px' // Set width to Analyze button
         });
 
         analyzeButton.addEventListener('mouseover', () => {
@@ -283,7 +291,7 @@
         } else {
             for (const [node, users] of sortedLocations) {
                 const userNames = users.map(user => user.name).join(', ');
-                popupContentHTML += `<p><b>${node}:</b> ${userNames}</p>`;
+                popupContentHTML += `<p><b>${node}:</b> ${node} - ${userNames}</p>`;
             }
         }
         popupContentHTML += '</div>';
@@ -380,6 +388,139 @@
         }
     }
 
+    function createGoToNodeButton() {
+        // Container for button and input
+        goToNodeContainer = document.createElement('div'); // Assign to module-level variable
+        Object.assign(goToNodeContainer.style, {
+            position: 'fixed',
+            top: '70px',
+            left: '10px',
+            zIndex: '1000',
+            display: 'none', // Initially hidden
+            display: 'flex',
+            flexDirection: 'column', // Changed to column to stack vertically
+            alignItems: 'flex-start',
+            width: '150px' // Set width for the container to match Analyze Button
+        });
+
+
+        // Input field for Node name
+        nodeInput = document.createElement('input'); // Assign to module-level variable
+        nodeInput.type = 'text';
+        nodeInput.id = 'node-input';
+        nodeInput.placeholder = 'Node';
+        Object.assign(nodeInput.style, {
+            width: '100%',      // Input field takes full width of container
+            padding: '8px',
+            borderRadius: '5px',
+            border: '1px solid #777',
+            backgroundColor: 'rgba(30, 30, 30, 0.7)',
+            color: '#eee',
+            fontFamily: 'sans-serif',
+            fontSize: '14px',
+            marginBottom: '5px', // Space below input
+            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        });
+        goToNodeContainer.appendChild(nodeInput);
+
+        goToNodeButton = document.createElement('button');
+        goToNodeButton.textContent = 'Астрал';
+        Object.assign(goToNodeButton.style, {
+            width: '100%',      // Button takes full width of container
+            backgroundColor: 'rgba(50, 50, 50, 0.6)',
+            color: '#eee',
+            border: '1px solid #777',
+            padding: '8px 15px',
+            borderRadius: '5px',
+            cursor: 'pointer',
+            fontFamily: 'serif',
+            fontSize: '15px',
+            boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
+            transition: 'background-color 0.3s ease',
+            height: '35px',
+            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        });
+
+        goToNodeButton.addEventListener('mouseover', () => {
+            goToNodeButton.style.backgroundColor = 'rgba(70, 70, 70, 0.7)';
+        });
+        goToNodeButton.addEventListener('mouseout', () => {
+            goToNodeButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
+        });
+
+        goToNodeButton.addEventListener('click', handleGoToNodeClick);
+        goToNodeContainer.appendChild(goToNodeButton);
+
+        // Display for current node below input and button
+        currentNodeDisplay = document.createElement('div');
+        currentNodeDisplay.id = 'current-node-display';
+        currentNodeDisplay.textContent = 'Вы сейчас в: -';
+        Object.assign(currentNodeDisplay.style, {
+            color: '#ccc',
+            fontSize: '12px',
+            fontFamily: 'sans-serif',
+            marginTop: '5px',
+            textAlign: 'left',
+            width: '100%',
+            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        });
+        goToNodeContainer.appendChild(currentNodeDisplay);
+    }
+
+    function handleGoToNodeClick() {
+        if (goToNodeButton.textContent === 'Астрал') { // Text changed to 'Астрал'
+            // 1. Remember current location
+            originalNode = lastVisitedNode;
+
+            // 2. Check if location is null
+            originalNode = lastVisitedNode;
+            if (!originalNode) {
+                addToOverlayHistory("Предупреждение: Невозможно запомнить текущую локацию.");
+                console.warn("Current location is null, cannot proceed with navigation.");
+                return; // Stop here if no location is remembered
+            }
+
+            // 3. Get node from input field
+            const targetNode = nodeInput.value.trim(); // Get value from input field (using module-level variable)
+
+            if (!targetNode) { // Check if input is empty
+                addToOverlayHistory("Предупреждение: Введите имя Node.");
+                console.warn("Node input is empty, cannot proceed with navigation.");
+                return;
+            }
+
+
+            // 4. Send roomChange request with user-entered node
+            const roomChangeMessage = {
+                "reason": "roomChange",
+                "initiator": myInitiatorId,
+                "node": targetNode
+            };
+            currentWs.send(JSON.stringify(roomChangeMessage));
+            console.log(`Запрос roomChange отправлен для node: ${targetNode}`);
+
+            // 5. Change button text
+            goToNodeButton.textContent = 'Вернуться';
+
+        } else if (goToNodeButton.textContent === 'Вернуться') {
+            // 6. Return to original location
+            if (originalNode) {
+                const returnRoomChangeMessage = {
+                    "reason": "roomChange",
+                    "initiator": myInitiatorId,
+                    "node": originalNode
+                };
+                currentWs.send(JSON.stringify(returnRoomChangeMessage));
+                console.log(`Возврат в последнюю локацию: ${originalNode}`);
+                addToOverlayHistory(`Возврат в: ${originalNode}`);
+            }
+
+            // 7. Reset button state
+            goToNodeButton.textContent = 'Астрал';
+            originalNode = null; // Clear remembered location
+        }
+    }
+
 
     window.WebSocket = function(url, protocols) {
         currentWs = new originalWebSocket(url, protocols);
@@ -391,7 +532,10 @@
                 const data = JSON.parse(message);
                 if (data.reason === 'roomChange' && data.initiator === myInitiatorId && isTrackingNode) {
                     lastVisitedNode = data.node;
-                    console.log(`[Tampermonkey WebSocket Listener]: Last visited node запомнен: ${lastVisitedNode}`);
+                    console.log(`[NodeWatch WebSocket Listener]: Last visited node запомнен: ${lastVisitedNode}`);
+                    if (currentNodeDisplay) { // Update current node display
+                        currentNodeDisplay.textContent = `Вы сейчас в: ${lastVisitedNode}`;
+                    }
                 }
             } catch (e) { /* Ignore JSON parse errors */ }
             originalSend(message);
@@ -399,12 +543,14 @@
 
 
         ws.addEventListener('open', () => {
-            console.log('[Tampermonkey WebSocket Listener]: WebSocket соединение установлено для URL:', url);
+            console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
             addToOverlayHistory("WebSocket: Соединение установлено");
             clearOverlayInitialMessage();
             analyzeButton.style.display = 'block';
             progressBarContainer.style.display = 'block';
             progressText.style.display = 'block';
+            goToNodeContainer.style.display = 'flex'; // Show the container for input and button
+            document.body.appendChild(goToNodeContainer); // Append to body only when WebSocket opens
         });
 
         ws.addEventListener('message', function(event) {
@@ -414,7 +560,7 @@
                 } catch (e) {
                     if (typeof event.data === 'string') {
                         myInitiatorId = event.data;
-                        console.log('[Tampermonkey WebSocket Listener]: Initiator ID captured:', myInitiatorId);
+                        console.log('[NodeWatch WebSocket Listener]: Initiator ID captured:', myInitiatorId);
                         isFirstMessage = false;
                         return;
                     }
@@ -429,13 +575,13 @@
                     const userName = data.user.name;
                     const userId = data.user.id;
                     userMap[userId] = userName;
-                    console.log('[Tampermonkey WebSocket Listener - Обнаружено userJoin сообщение. Пользователь:', userName, 'ID:', userId);
+                    console.log('[NodeWatch WebSocket Listener - Обнаружено userJoin сообщение. Пользователь:', userName, 'ID:', userId);
                     addToOverlayHistory(`[User Join] ${userName}`);
 
                 } else if (data.reason === 'userLeft' && data.initiator && data.initiator !== myInitiatorId) {
                     const userIdLeft = data.initiator;
                     const userNameLeft = userMap[userIdLeft];
-                    console.log('[Tampermonkey WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
+                    console.log('[NodeWatch WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
 
                     const overlayMessage = userNameLeft ? `[User Left] ${userNameLeft}` : `[User Left] ID: ${userIdLeft}`;
                     addToOverlayHistory(overlayMessage);
@@ -454,25 +600,34 @@
         });
 
         ws.addEventListener('close', () => {
-            console.log('[Tampermonkey WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
+            console.log('[NodeWatch WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
             addToOverlayHistory("WebSocket: Соединение закрыто");
             clearAnalysisStatus();
             isAnalyzing = false;
             isTrackingNode = false;
+            goToNodeContainer.style.display = 'none'; // Hide the input and button container
+            if (goToNodeContainer.parentNode === document.body) { // Check if it's appended before removing
+                document.body.removeChild(goToNodeContainer); // Cleanly remove from DOM on close
+            }
         });
 
         ws.addEventListener('error', (error) => {
-            console.error('[Tampermonkey WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
+            console.error('[NodeWatch WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
             addToOverlayHistory("WebSocket: Ошибка соединения");
             clearAnalysisStatus();
             isAnalyzing = false;
             isTrackingNode = false;
+            goToNodeContainer.style.display = 'none'; // Hide the input and button container
+            if (goToNodeContainer.parentNode === document.body) { // Check if it's appended before removing
+                document.body.removeChild(goToNodeContainer); // Cleanly remove from DOM on error
+            }
         });
 
         return ws;
     };
 
-    console.log('[Tampermonkey WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
+    console.log('[NodeWatch WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
     createOverlay();
     createAnalyzeButton();
+    createGoToNodeButton(); // Create button and input - but don't append yet
 })();
