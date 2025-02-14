@@ -117,7 +117,7 @@
 
 ## 📜 Лицензия
 
-Этот проект лицензирован по [No Mercy License](LICENSE) - подробности смотрите в файле [LICENSE](https://github.com/ShadowKyst/NodeWatch-Fukuro-userscript/blob/master/LICENSE.md).
+Этот проект лицензирован по [No Mercy License](https://github.com/ShadowKyst/NodeWatch-Fukuro-userscript/blob/master/LICENSE.md) - подробности смотрите в файле [LICENSE](https://github.com/ShadowKyst/NodeWatch-Fukuro-userscript/blob/master/LICENSE.md).
 
 <br/>
 
