@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location.
 // @author       ShadowKyst
@@ -12,13 +12,88 @@
 (function() {
     'use strict';
 
+    /**
+     * Configuration object to store constants and configurable values.
+     */
+    const Config = {
+        HISTORY_SIZE: 5,
+        MESSAGE_TIMEOUT: 5000,
+        FADE_OUT_DURATION: 500,
+        OVERLAY_Z_INDEX: 1000,
+        BUTTON_Z_INDEX: 1000,
+        PROGRESS_BAR_Z_INDEX: 1000,
+        POPUP_Z_INDEX: 1001,
+        DEFAULT_OVERLAY_TEXT: "WebSocket Listener Активен",
+        ANALYZE_BUTTON_TEXT: "Найти РП",
+        GO_TO_ASTRAL_BUTTON_TEXT: "Астрал",
+        GO_BACK_BUTTON_TEXT: "Вернуться",
+        NODE_INPUT_PLACEHOLDER: "Node",
+        CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: ",
+        ANALYSIS_STATUS_PREFIX: "Анализ локаций: ",
+        ANALYSIS_COMPLETE_STATUS: "Анализ локаций завершен",
+        ANALYSIS_POPUP_TITLE: "Результаты анализа локаций:",
+        ANALYSIS_POPUP_NO_USERS: "<p>Нет пользователей в локациях (кроме вас).</p>",
+        WEBSOCKET_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
+        WEBSOCKET_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
+        WEBSOCKET_CONNECTION_ERROR: "WebSocket: Ошибка соединения",
+        USER_JOIN_MESSAGE_PREFIX: "[User Join] ",
+        USER_LEFT_MESSAGE_PREFIX: "[User Left] ",
+        RETURN_TO_LAST_LOCATION_PREFIX: "Возврат в: ",
+        GO_TO_NODE_MESSAGE_PREFIX: "Переход в: ", // New log message for "Astral" navigation
+        LOCATION_ANALYSIS_STARTING: "Начинаю анализ локаций...",
+        LOCATION_ANALYSIS_ALREADY_RUNNING: "Анализ уже запущен.",
+        INITIATOR_ID_NOT_RECEIVED: "Initiator ID не получен. Перезагрузите страницу.",
+        WARNING_NO_CURRENT_LOCATION: "Предупреждение: Невозможно запомнить текущую локацию.",
+        WARNING_NODE_INPUT_EMPTY: "Предупреждение: Введите имя Node.",
+        ANALYZE_BUTTON_TOOLTIP: "Запустить анализ локаций для поиска РП", // Tooltip for Analyze button
+        GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node", // Tooltip for "Astral" button mode
+        GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию" // Tooltip for "Вернуться" button mode
+    };
+
+    /**
+     * Utility functions for DOM manipulation and styling.
+     */
+    const Utils = {
+        createElement: function(tagName, options = {}) {
+            const element = document.createElement(tagName);
+            if (options.styles) {
+                this.applyStyles(element, options.styles);
+            }
+            if (options.attributes) {
+                for (const key in options.attributes) {
+                    element.setAttribute(key, options.attributes[key]);
+                }
+            }
+            if (options.textContent) {
+                element.textContent = options.textContent;
+            }
+            if (options.innerHTML) {
+                element.innerHTML = options.innerHTML;
+            }
+            if (options.className) {
+                element.className = options.className;
+            }
+            return element;
+        },
+        applyStyles: function(element, styles) {
+            Object.assign(element.style, styles);
+        }
+    };
+
+    /**
+     * Script state management object.
+     */
+    const ScriptState = {
+        isAnalyzing: false,
+        isTrackingNode: true,
+        originalNode: null,
+        goToNodeButtonMode: 'astral' // 'astral' или 'back'
+    };
+
     const originalWebSocket = window.WebSocket;
     const userMap = {};
     let overlayDiv = null;
     const overlayHistory = [];
-    const historySize = 5;
-    const messageTimeout = 5000;
-    const fadeOutDuration = 500;
     let myInitiatorId = null;
     let isFirstMessage = true;
 
@@ -47,100 +122,75 @@
     ];
     let currentNodeIndex = 0;
     let locationData = {};
-    let isAnalyzing = false;
     let currentWs = null;
     let analysisPopup = null;
     let lastVisitedNode = null;
-    let isTrackingNode = true;
     let analysisStatusDiv = null;
 
     // New Node Navigation Variables
     let goToNodeButton = null;
-    let originalNode = null;     // To store the node before navigation
-    let nodeInput = null;         // Input field for node
-    let currentNodeDisplay = null; // Display current node
-    let goToNodeContainer = null; // Container for GoToNode elements (module-level)
+    let nodeInput = null;
+    let currentNodeDisplay = null;
+    let goToNodeContainer = null;
 
+
+    /**
+     * Creates the overlay div to display WebSocket messages.
+     */
     function createOverlay() {
-        overlayDiv = document.createElement('div');
-        overlayDiv.id = 'websocket-overlay';
-        Object.assign(overlayDiv.style, {
-            position: 'fixed',
-            top: '10px',
-            right: '10px',
-            backgroundColor: 'rgba(0, 0, 0, 0.7)',
-            color: 'white',
-            padding: '10px',
-            borderRadius: '5px',
-            zIndex: '1000',
-            fontFamily: 'sans-serif',
-            fontSize: '14px',
-            textAlign: 'left',
-            maxWidth: '300px',
-            overflowWrap: 'break-word',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'flex-end'
+        overlayDiv = Utils.createElement('div', {
+            attributes: { id: 'websocket-overlay' },
+            styles: {
+                position: 'fixed',
+                top: '10px',
+                right: '10px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                color: 'white',
+                padding: '10px',
+                borderRadius: '5px',
+                zIndex: Config.OVERLAY_Z_INDEX,
+                fontFamily: 'sans-serif',
+                fontSize: '14px',
+                textAlign: 'left',
+                maxWidth: '300px',
+                overflowWrap: 'break-word',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-end'
+            },
+            textContent: Config.DEFAULT_OVERLAY_TEXT
         });
         document.body.appendChild(overlayDiv);
-        overlayDiv.textContent = "WebSocket Listener Активен";
     }
 
+    /**
+     * Clears the initial message from the overlay.
+     */
     function clearOverlayInitialMessage() {
         if (overlayDiv) {
             overlayDiv.innerHTML = '';
         }
     }
 
-    function updateOverlay(message) {
-        if (!overlayDiv) {
-            createOverlay();
-        }
-        overlayHistory.push(message);
-        if (overlayHistory.length > historySize) {
-            overlayHistory.shift();
-        }
-        overlayDiv.innerHTML = '';
-        if (analysisStatusDiv) {
-            overlayDiv.appendChild(analysisStatusDiv);
-        }
-        overlayHistory.forEach(histMessage => {
-            const messageDiv = document.createElement('div');
-            messageDiv.textContent = messageText;
-            overlayDiv.appendChild(messageDiv);
-        });
-    }
-
-    function setAnalysisStatus(statusText) {
-        if (!analysisStatusDiv) {
-            analysisStatusDiv = document.createElement('div');
-            overlayDiv.prepend(analysisStatusDiv);
-        }
-        analysisStatusDiv.textContent = statusText;
-    }
-
-    function clearAnalysisStatus() {
-        if (analysisStatusDiv && overlayDiv.contains(analysisStatusDiv)) {
-            overlayDiv.removeChild(analysisStatusDiv);
-            analysisStatusDiv = null;
-        }
-    }
-
-
+    /**
+     * Updates the overlay with a new message, managing history and fade out.
+     * @param {string} messageText - The message to display.
+     */
     function addToOverlayHistory(messageText) {
         if (!overlayDiv) {
             createOverlay();
         }
-        const messageDiv = document.createElement('div');
-        messageDiv.textContent = messageText;
-        Object.assign(messageDiv.style, {
-            opacity: '1',
-            transition: `opacity ${fadeOutDuration}ms ease-in-out`
+        const messageDiv = Utils.createElement('div', {
+            textContent: messageText,
+            styles: {
+                opacity: '1',
+                transition: `opacity ${Config.FADE_OUT_DURATION}ms ease-in-out`
+            }
         });
         overlayDiv.appendChild(messageDiv);
 
         overlayHistory.push(messageDiv);
-        if (overlayHistory.length > historySize) {
+        if (overlayHistory.length > Config.HISTORY_SIZE) {
             const oldestMessageDiv = overlayHistory.shift();
             if (oldestMessageDiv && overlayDiv.contains(oldestMessageDiv)) {
                 overlayDiv.removeChild(oldestMessageDiv);
@@ -153,31 +203,57 @@
                 if (overlayDiv && overlayDiv.contains(messageDiv)) {
                     overlayDiv.removeChild(messageDiv);
                 }
-            }, fadeOutDuration);
-        }, messageTimeout);
+            }, Config.FADE_OUT_DURATION);
+        }, Config.MESSAGE_TIMEOUT);
     }
 
+    /**
+     * Sets the analysis status text in the overlay.
+     * @param {string} statusText - The status text to display.
+     */
+    function setAnalysisStatus(statusText) {
+        if (!analysisStatusDiv) {
+            analysisStatusDiv = Utils.createElement('div');
+            overlayDiv.prepend(analysisStatusDiv);
+        }
+        analysisStatusDiv.textContent = statusText;
+    }
 
+    /**
+     * Clears the analysis status text from the overlay.
+     */
+    function clearAnalysisStatus() {
+        if (analysisStatusDiv && overlayDiv.contains(analysisStatusDiv)) {
+            overlayDiv.removeChild(analysisStatusDiv);
+            analysisStatusDiv = null;
+        }
+    }
+
+    /**
+     * Creates the "Analyze Location" button.
+     */
     function createAnalyzeButton() {
-        analyzeButton = document.createElement('button');
-        analyzeButton.textContent = 'Найти РП';
-        Object.assign(analyzeButton.style, {
-            position: 'fixed',
-            top: '10px',
-            left: '10px',
-            zIndex: '1000',
-            backgroundColor: 'rgba(50, 50, 50, 0.6)',
-            color: '#eee',
-            border: '1px solid #777',
-            padding: '8px 15px',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontFamily: 'serif',
-            fontSize: '15px',
-            boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
-            transition: 'background-color 0.3s ease',
-            display: 'none',
-            width: '150px' // Set width to Analyze button
+        analyzeButton = Utils.createElement('button', {
+            attributes: { title: Config.ANALYZE_BUTTON_TOOLTIP }, // Add tooltip
+            textContent: Config.ANALYZE_BUTTON_TEXT,
+            styles: {
+                position: 'fixed',
+                top: '10px',
+                left: '10px',
+                zIndex: Config.BUTTON_Z_INDEX,
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                border: '1px solid #777',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
+                transition: 'background-color 0.3s ease',
+                display: 'none',
+                width: '150px'
+            }
         });
 
         analyzeButton.addEventListener('mouseover', () => {
@@ -186,78 +262,96 @@
         analyzeButton.addEventListener('mouseout', () => {
             analyzeButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
         });
-
-        document.body.appendChild(analyzeButton);
         analyzeButton.addEventListener('click', startLocationAnalysis);
 
-        progressBarContainer = document.createElement('div');
-        Object.assign(progressBarContainer.style, {
-            position: 'fixed',
-            top: '45px',
-            left: '10px',
-            width: '150px',
-            height: '10px',
-            backgroundColor: 'rgba(100, 100, 100, 0.3)',
-            borderRadius: '5px',
-            overflow: 'hidden',
-            zIndex: '1000',
-            display: 'none'
+        document.body.appendChild(analyzeButton);
+        createProgressBar();
+    }
+
+    /**
+     * Creates the progress bar elements.
+     */
+    function createProgressBar() {
+        progressBarContainer = Utils.createElement('div', {
+            styles: {
+                position: 'fixed',
+                top: '45px',
+                left: '10px',
+                width: '150px',
+                height: '10px',
+                backgroundColor: 'rgba(100, 100, 100, 0.3)',
+                borderRadius: '5px',
+                overflow: 'hidden',
+                zIndex: Config.PROGRESS_BAR_Z_INDEX,
+                display: 'none'
+            }
         });
         document.body.appendChild(progressBarContainer);
 
-        progressBar = document.createElement('div');
-        Object.assign(progressBar.style, {
-            width: '0%',
-            height: '100%',
-            backgroundColor: 'rgba(0, 150, 0, 0.7)'
+        progressBar = Utils.createElement('div', {
+            styles: {
+                width: '0%',
+                height: '100%',
+                backgroundColor: 'rgba(0, 150, 0, 0.7)'
+            }
         });
         progressBarContainer.appendChild(progressBar);
 
-        progressText = document.createElement('div');
-        Object.assign(progressText.style, {
-            position: 'fixed',
-            top: '45px',
-            left: '170px',
-            color: '#eee',
-            fontSize: '12px',
-            fontFamily: 'sans-serif',
-            zIndex: '1000',
-            display: 'none'
+        progressText = Utils.createElement('div', {
+            textContent: '0%',
+            styles: {
+                position: 'fixed',
+                top: '45px',
+                left: '170px',
+                color: '#eee',
+                fontSize: '12px',
+                fontFamily: 'sans-serif',
+                zIndex: Config.PROGRESS_BAR_Z_INDEX,
+                display: 'none'
+            }
         });
-        progressText.textContent = '0%';
         document.body.appendChild(progressText);
     }
 
+    /**
+     * Updates the progress bar and text.
+     * @param {number} percentage - The progress percentage (0-100).
+     */
     function updateProgressBar(percentage) {
         progressBar.style.width = `${percentage}%`;
         progressText.textContent = `${percentage}%`;
     }
 
-
+    /**
+     * Starts the location analysis process.
+     */
     function startLocationAnalysis() {
-        if (isAnalyzing) {
-            console.log("Анализ уже запущен.");
+        if (ScriptState.isAnalyzing) {
+            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
             return;
         }
         if (!myInitiatorId) {
-            console.log("Initiator ID не получен. Перезагрузите страницу.");
+            console.log(Config.INITIATOR_ID_NOT_RECEIVED);
             return;
         }
 
-        isAnalyzing = true;
+        ScriptState.isAnalyzing = true;
         locationData = {};
         currentNodeIndex = 0;
-        isTrackingNode = false;
+        ScriptState.isTrackingNode = false;
         updateProgressBar(0);
-        console.log("Начинаю анализ локаций...");
-        setAnalysisStatus("Анализ локаций...");
+        console.log(Config.LOCATION_ANALYSIS_STARTING);
+        setAnalysisStatus(Config.ANALYSIS_STATUS_PREFIX + nodeList[0]); // Initial status
         analyzeNextLocation();
     }
 
+    /**
+     * Analyzes the next location in the nodeList.
+     */
     function analyzeNextLocation() {
         if (currentNodeIndex < nodeList.length) {
             const node = nodeList[currentNodeIndex];
-            setAnalysisStatus(`Анализ локаций: ${node}`);
+            setAnalysisStatus(Config.ANALYSIS_STATUS_PREFIX + node);
 
             const roomChangeMessage = {
                 "reason": "roomChange",
@@ -274,21 +368,24 @@
         }
     }
 
+    /**
+     * Finishes the location analysis, displays results, and returns to the last visited node.
+     */
     function finishLocationAnalysis() {
-        isAnalyzing = false;
-        setAnalysisStatus("Анализ локаций завершен");
+        ScriptState.isAnalyzing = false;
+        setAnalysisStatus(Config.ANALYSIS_COMPLETE_STATUS);
         updateProgressBar(100);
-        console.log("Анализ локаций завершен!");
+        console.log(Config.ANALYSIS_COMPLETE_STATUS);
 
         const sortedLocations = Object.entries(locationData)
             .map(([node, users]) => [node, users.filter(user => user.id !== myInitiatorId)])
             .filter(([, users]) => users.length > 0)
             .sort(([, usersA], [, usersB]) => usersB.length - usersA.length);
 
-        let popupContentHTML = '<h2>Результаты анализа локаций:</h2><div style="max-height: 300px; overflow-y: auto;">';
+        let popupContentHTML = `<h2>${Config.ANALYSIS_POPUP_TITLE}</h2><div style="max-height: 300px; overflow-y: auto;">`;
 
         if (sortedLocations.length === 0) {
-            popupContentHTML += "<p>Нет пользователей в локациях (кроме вас).</p>";
+            popupContentHTML += Config.ANALYSIS_POPUP_NO_USERS;
         } else {
             for (const [node, users] of sortedLocations) {
                 const userNames = users.map(user => user.name).join(', ');
@@ -306,82 +403,114 @@
                 "node": lastVisitedNode
             };
             currentWs.send(JSON.stringify(returnRoomChangeMessage));
-            console.log(`Возвращаюсь в последнюю локацию: ${lastVisitedNode}`);
-            addToOverlayHistory(`Возврат в: ${lastVisitedNode}`);
+            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${lastVisitedNode}`);
+            addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${lastVisitedNode}`);
         }
-        isTrackingNode = true;
-        setTimeout(clearAnalysisStatus, messageTimeout);
+        ScriptState.isTrackingNode = true;
+        setTimeout(clearAnalysisStatus, Config.MESSAGE_TIMEOUT);
     }
 
+    /**
+     * Creates the analysis results popup element.
+     * @param {string} contentHTML - HTML content for the popup.
+     * @returns {HTMLDivElement} The popup div element.
+     * @private
+     */
+    function _createPopupElement(contentHTML) {
+        return Utils.createElement('div', {
+            styles: {
+                position: 'fixed',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                backgroundColor: 'rgba(20, 20, 20, 0.9)',
+                color: 'white',
+                padding: '20px',
+                borderRadius: '10px',
+                zIndex: Config.POPUP_Z_INDEX,
+                fontFamily: 'sans-serif',
+                fontSize: '16px',
+                textAlign: 'left',
+                maxWidth: '400px',
+                boxShadow: '0 4px 8px rgba(0,0,0,0.5)'
+            },
+            innerHTML: contentHTML
+        });
+    }
+
+    /**
+     * Creates the close icon element for the popup.
+     * @returns {HTMLDivElement} The close icon div element.
+     * @private
+     */
+    function _createCloseIcon() {
+        return Utils.createElement('div', {
+            attributes: { id: 'popup-close-icon' },
+            styles: {
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                width: '20px',
+                height: '20px',
+                cursor: 'pointer',
+                opacity: '0.7'
+            },
+            innerHTML: `
+                <style>
+                    #popup-close-icon::before, #popup-close-icon::after {
+                        content: '';
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        width: 100%;
+                        height: 2px;
+                        background-color: white;
+                    }
+                    #popup-close-icon::before {
+                        transform: translate(-50%, -50%) rotate(45deg);
+                    }
+                    #popup-close-icon::after {
+                        transform: translate(-50%, -50%) rotate(-45deg);
+                    }
+                    #popup-close-icon:hover {
+                        opacity: 1;
+                    }
+                </style>
+            `
+        });
+    }
+
+    /**
+     * Appends the close icon to the popup and sets its onclick handler.
+     * @param {HTMLDivElement} popupElement - The popup element.
+     * @param {HTMLDivElement} closeIconElement - The close icon element.
+     * @private
+     */
+    function _appendCloseIconToPopup(popupElement, closeIconElement) {
+        closeIconElement.onclick = closeAnalysisPopup;
+        popupElement.appendChild(closeIconElement);
+    }
+
+
+    /**
+     * Creates and displays the analysis results popup.
+     * @param {string} contentHTML - HTML content for the popup.
+     */
     function createAnalysisPopup(contentHTML) {
         if (analysisPopup) {
-            document.body.removeChild(analysisPopup);
-            analysisPopup = null;
+            closeAnalysisPopup();
         }
 
-        analysisPopup = document.createElement('div');
-        Object.assign(analysisPopup.style, {
-            position: 'fixed',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            backgroundColor: 'rgba(20, 20, 20, 0.9)',
-            color: 'white',
-            padding: '20px',
-            borderRadius: '10px',
-            zIndex: '1001',
-            fontFamily: 'sans-serif',
-            fontSize: '16px',
-            textAlign: 'left',
-            maxWidth: '400px',
-            boxShadow: '0 4px 8px rgba(0,0,0,0.5)'
-        });
-
-        analysisPopup.innerHTML = contentHTML;
-
-        // Create close icon крестик
-        const closeIcon = document.createElement('div');
-        closeIcon.id = 'popup-close-icon';
-        Object.assign(closeIcon.style, {
-            position: 'absolute',
-            top: '10px',
-            right: '10px',
-            width: '20px',
-            height: '20px',
-            cursor: 'pointer',
-            opacity: '0.7'
-        });
-
-        // Styling for the крестик (X) using CSS pseudo-elements
-        closeIcon.innerHTML = `
-            <style>
-                #popup-close-icon::before, #popup-close-icon::after {
-                    content: '';
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    width: 100%;
-                    height: 2px;
-                    background-color: white;
-                }
-                #popup-close-icon::before {
-                    transform: translate(-50%, -50%) rotate(45deg);
-                }
-                #popup-close-icon::after {
-                    transform: translate(-50%, -50%) rotate(-45deg);
-                }
-                #popup-close-icon:hover {
-                    opacity: 1;
-                }
-            </style>
-        `;
-
-        closeIcon.onclick = closeAnalysisPopup;
-        analysisPopup.appendChild(closeIcon);
+        analysisPopup = _createPopupElement(contentHTML);
+        const closeIcon = _createCloseIcon();
+        _appendCloseIconToPopup(analysisPopup, closeIcon);
 
         document.body.appendChild(analysisPopup);
     }
 
+    /**
+     * Closes the analysis results popup.
+     */
     function closeAnalysisPopup() {
         if (analysisPopup) {
             document.body.removeChild(analysisPopup);
@@ -389,57 +518,62 @@
         }
     }
 
+     /**
+     * Creates the "Go To Node" button and input elements.
+     */
     function createGoToNodeButton() {
-        // Container for button and input
-        goToNodeContainer = document.createElement('div'); // Assign to module-level variable
-        Object.assign(goToNodeContainer.style, {
-            position: 'fixed',
-            top: '70px',
-            left: '10px',
-            zIndex: '1000',
-            display: 'none', // Initially hidden
-            display: 'flex',
-            flexDirection: 'column', // Changed to column to stack vertically
-            alignItems: 'flex-start',
-            width: '150px' // Set width for the container to match Analyze Button
+        goToNodeContainer = Utils.createElement('div', {
+            styles: {
+                position: 'fixed',
+                top: '70px',
+                left: '10px',
+                zIndex: Config.BUTTON_Z_INDEX,
+                display: 'none',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                width: '150px'
+            }
         });
 
-
-        // Input field for Node name
-        nodeInput = document.createElement('input'); // Assign to module-level variable
-        nodeInput.type = 'text';
-        nodeInput.id = 'node-input';
-        nodeInput.placeholder = 'Node';
-        Object.assign(nodeInput.style, {
-            width: '100%',      // Input field takes full width of container
-            padding: '8px',
-            borderRadius: '5px',
-            border: '1px solid #777',
-            backgroundColor: 'rgba(30, 30, 30, 0.7)',
-            color: '#eee',
-            fontFamily: 'sans-serif',
-            fontSize: '14px',
-            marginBottom: '5px', // Space below input
-            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        nodeInput = Utils.createElement('input', {
+            attributes: {
+                type: 'text',
+                id: 'node-input',
+                placeholder: Config.NODE_INPUT_PLACEHOLDER
+            },
+            styles: {
+                width: '100%',
+                padding: '8px',
+                borderRadius: '5px',
+                border: '1px solid #777',
+                backgroundColor: 'rgba(30, 30, 30, 0.7)',
+                color: '#eee',
+                fontFamily: 'sans-serif',
+                fontSize: '14px',
+                marginBottom: '5px',
+                boxSizing: 'border-box'
+            }
         });
         goToNodeContainer.appendChild(nodeInput);
 
-        goToNodeButton = document.createElement('button');
-        goToNodeButton.textContent = 'Астрал';
-        Object.assign(goToNodeButton.style, {
-            width: '100%',      // Button takes full width of container
-            backgroundColor: 'rgba(50, 50, 50, 0.6)',
-            color: '#eee',
-            border: '1px solid #777',
-            padding: '8px 15px',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontFamily: 'serif',
-            fontSize: '15px',
-            boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
-            transition: 'background-color 0.3s ease',
-            height: '35px',
-            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        goToNodeButton = Utils.createElement('button', {
+            attributes: { title: Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL }, // Default tooltip for "Astral" mode
+            textContent: Config.GO_TO_ASTRAL_BUTTON_TEXT,
+            styles: {
+                width: '100%',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                border: '1px solid #777',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
+                transition: 'background-color 0.3s ease',
+                height: '35px',
+                boxSizing: 'border-box'
+            }
         });
 
         goToNodeButton.addEventListener('mouseover', () => {
@@ -448,77 +582,88 @@
         goToNodeButton.addEventListener('mouseout', () => {
             goToNodeButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
         });
-
         goToNodeButton.addEventListener('click', handleGoToNodeClick);
         goToNodeContainer.appendChild(goToNodeButton);
 
-        // Display for current node below input and button
-        currentNodeDisplay = document.createElement('div');
-        currentNodeDisplay.id = 'current-node-display';
-        currentNodeDisplay.textContent = 'Вы сейчас в: -';
-        Object.assign(currentNodeDisplay.style, {
-            color: '#ccc',
-            fontSize: '12px',
-            fontFamily: 'sans-serif',
-            marginTop: '5px',
-            textAlign: 'left',
-            width: '100%',
-            boxSizing: 'border-box' // Make padding and border part of the element's total width
+        currentNodeDisplay = Utils.createElement('div', {
+            attributes: { id: 'current-node-display' },
+            textContent: Config.CURRENT_NODE_TEXT_PREFIX,
+            styles: {
+                color: '#ccc',
+                fontSize: '12px',
+                fontFamily: 'sans-serif',
+                marginTop: '5px',
+                textAlign: 'left',
+                width: '100%',
+                boxSizing: 'border-box'
+            }
         });
         goToNodeContainer.appendChild(currentNodeDisplay);
     }
 
-    function handleGoToNodeClick() {
-        if (goToNodeButton.textContent === 'Астрал') { // Text changed to 'Астрал'
-            // 1. Remember current location
-            originalNode = lastVisitedNode;
+    /**
+     * Handles the "Go To Astral" button click.
+     * @private
+     */
+    function _handleGoToAstralClick() {
+        ScriptState.originalNode = lastVisitedNode;
 
-            // 2. Check if location is null
-            originalNode = lastVisitedNode;
-            if (!originalNode) {
-                addToOverlayHistory("Предупреждение: Невозможно запомнить текущую локацию.");
-                console.warn("Current location is null, cannot proceed with navigation.");
-                return; // Stop here if no location is remembered
-            }
+        if (!ScriptState.originalNode) {
+            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            return;
+        }
 
-            // 3. Get node from input field
-            const targetNode = nodeInput.value.trim(); // Get value from input field (using module-level variable)
+        const targetNode = nodeInput.value.trim();
+        if (!targetNode) {
+            addToOverlayHistory(Config.WARNING_NODE_INPUT_EMPTY);
+            console.warn(Config.WARNING_NODE_INPUT_EMPTY);
+            return;
+        }
 
-            if (!targetNode) { // Check if input is empty
-                addToOverlayHistory("Предупреждение: Введите имя Node.");
-                console.warn("Node input is empty, cannot proceed with navigation.");
-                return;
-            }
+        const roomChangeMessage = {
+            "reason": "roomChange",
+            "initiator": myInitiatorId,
+            "node": targetNode
+        };
+        currentWs.send(JSON.stringify(roomChangeMessage));
+        console.log(`Запрос roomChange отправлен для node: ${targetNode}`);
+        addToOverlayHistory(`${Config.GO_TO_NODE_MESSAGE_PREFIX} ${targetNode}`); // Log "Astral" navigation
+        goToNodeButton.textContent = Config.GO_BACK_BUTTON_TEXT;
+        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_BACK; // Change tooltip
+        ScriptState.goToNodeButtonMode = 'back';
+    }
 
-
-            // 4. Send roomChange request with user-entered node
-            const roomChangeMessage = {
+    /**
+     * Handles the "Go Back" button click.
+     * @private
+     */
+    function _handleGoBackClick() {
+        if (ScriptState.originalNode) {
+            const returnRoomChangeMessage = {
                 "reason": "roomChange",
                 "initiator": myInitiatorId,
-                "node": targetNode
+                "node": ScriptState.originalNode
             };
-            currentWs.send(JSON.stringify(roomChangeMessage));
-            console.log(`Запрос roomChange отправлен для node: ${targetNode}`);
+            currentWs.send(JSON.stringify(returnRoomChangeMessage));
+            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${ScriptState.originalNode}`);
+            addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${ScriptState.originalNode}`);
+        }
+        goToNodeButton.textContent = Config.GO_TO_ASTRAL_BUTTON_TEXT;
+        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL; // Change tooltip back
+        ScriptState.goToNodeButtonMode = 'astral';
+        ScriptState.originalNode = null;
+    }
 
-            // 5. Change button text
-            goToNodeButton.textContent = 'Вернуться';
 
-        } else if (goToNodeButton.textContent === 'Вернуться') {
-            // 6. Return to original location
-            if (originalNode) {
-                const returnRoomChangeMessage = {
-                    "reason": "roomChange",
-                    "initiator": myInitiatorId,
-                    "node": originalNode
-                };
-                currentWs.send(JSON.stringify(returnRoomChangeMessage));
-                console.log(`Возврат в последнюю локацию: ${originalNode}`);
-                addToOverlayHistory(`Возврат в: ${originalNode}`);
-            }
-
-            // 7. Reset button state
-            goToNodeButton.textContent = 'Астрал';
-            originalNode = null; // Clear remembered location
+    /**
+     * Handles the click event for the "Go To Node" button, delegating to specific handlers.
+     */
+    function handleGoToNodeClick() {
+        if (ScriptState.goToNodeButtonMode === 'astral') {
+            _handleGoToAstralClick();
+        } else if (ScriptState.goToNodeButtonMode === 'back') {
+            _handleGoBackClick();
         }
     }
 
@@ -531,27 +676,27 @@
         ws.send = function(message) {
             try {
                 const data = JSON.parse(message);
-                if (data.reason === 'roomChange' && data.initiator === myInitiatorId && isTrackingNode) {
+                if (data.reason === 'roomChange' && data.initiator === myInitiatorId && ScriptState.isTrackingNode) {
                     lastVisitedNode = data.node;
                     console.log(`[NodeWatch WebSocket Listener]: Last visited node запомнен: ${lastVisitedNode}`);
-                    if (currentNodeDisplay) { // Update current node display
-                        currentNodeDisplay.textContent = `Вы сейчас в: ${lastVisitedNode}`;
+                    if (currentNodeDisplay) {
+                        currentNodeDisplay.textContent = `${Config.CURRENT_NODE_TEXT_PREFIX} ${lastVisitedNode}`;
                     }
                 }
-            } catch (e) { /* Ignore JSON parse errors */ }
+            } catch (e) { /* Ignore JSON parse errors in send */ }
             originalSend(message);
         };
 
 
         ws.addEventListener('open', () => {
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
-            addToOverlayHistory("WebSocket: Соединение установлено");
+            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_ESTABLISHED);
             clearOverlayInitialMessage();
             analyzeButton.style.display = 'block';
             progressBarContainer.style.display = 'block';
             progressText.style.display = 'block';
-            goToNodeContainer.style.display = 'flex'; // Show the container for input and button
-            document.body.appendChild(goToNodeContainer); // Append to body only when WebSocket opens
+            goToNodeContainer.style.display = 'flex';
+            document.body.appendChild(goToNodeContainer);
         });
 
         ws.addEventListener('message', function(event) {
@@ -577,19 +722,19 @@
                     const userId = data.user.id;
                     userMap[userId] = userName;
                     console.log('[NodeWatch WebSocket Listener - Обнаружено userJoin сообщение. Пользователь:', userName, 'ID:', userId);
-                    addToOverlayHistory(`[User Join] ${userName}`);
+                    addToOverlayHistory(`${Config.USER_JOIN_MESSAGE_PREFIX} ${userName}`);
 
                 } else if (data.reason === 'userLeft' && data.initiator && data.initiator !== myInitiatorId) {
                     const userIdLeft = data.initiator;
                     const userNameLeft = userMap[userIdLeft];
                     console.log('[NodeWatch WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
 
-                    const overlayMessage = userNameLeft ? `[User Left] ${userNameLeft}` : `[User Left] ID: ${userIdLeft}`;
+                    const overlayMessage = userNameLeft ? `${Config.USER_LEFT_MESSAGE_PREFIX} ${userNameLeft}` : `${Config.USER_LEFT_MESSAGE_PREFIX} ID: ${userIdLeft}`;
                     addToOverlayHistory(overlayMessage);
                     delete userMap[userIdLeft];
 
                 } else if (data.reason === 'nodeUsers') {
-                    if (isAnalyzing) {
+                    if (ScriptState.isAnalyzing) {
                         const node = nodeList[currentNodeIndex];
                         locationData[node] = data.users;
                         console.log(`Получены nodeUsers для node: ${node}, пользователей: ${data.users.length}`);
@@ -597,30 +742,33 @@
                         analyzeNextLocation();
                     }
                 }
-            } catch (e) { /* JSON parse error handling */ }
+            } catch (e) {
+                console.error('[NodeWatch WebSocket Listener]: Ошибка обработки JSON сообщения:', e, event.data);
+                addToOverlayHistory("WebSocket: Ошибка данных");
+            }
         });
 
         ws.addEventListener('close', () => {
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
-            addToOverlayHistory("WebSocket: Соединение закрыто");
+            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_CLOSED);
             clearAnalysisStatus();
-            isAnalyzing = false;
-            isTrackingNode = false;
-            goToNodeContainer.style.display = 'none'; // Hide the input and button container
-            if (goToNodeContainer.parentNode === document.body) { // Check if it's appended before removing
-                document.body.removeChild(goToNodeContainer); // Cleanly remove from DOM on close
+            ScriptState.isAnalyzing = false;
+            ScriptState.isTrackingNode = false;
+            goToNodeContainer.style.display = 'none';
+            if (goToNodeContainer.parentNode === document.body) {
+                document.body.removeChild(goToNodeContainer);
             }
         });
 
         ws.addEventListener('error', (error) => {
             console.error('[NodeWatch WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
-            addToOverlayHistory("WebSocket: Ошибка соединения");
+            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_ERROR);
             clearAnalysisStatus();
-            isAnalyzing = false;
-            isTrackingNode = false;
-            goToNodeContainer.style.display = 'none'; // Hide the input and button container
-            if (goToNodeContainer.parentNode === document.body) { // Check if it's appended before removing
-                document.body.removeChild(goToNodeContainer); // Cleanly remove from DOM on error
+            ScriptState.isAnalyzing = false;
+            ScriptState.isTrackingNode = false;
+            goToNodeContainer.style.display = 'none';
+            if (goToNodeContainer.parentNode === document.body) {
+                document.body.removeChild(goToNodeContainer);
             }
         });
 
@@ -630,5 +778,5 @@
     console.log('[NodeWatch WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
     createOverlay();
     createAnalyzeButton();
-    createGoToNodeButton(); // Create button and input - but don't append yet
+    createGoToNodeButton();
 })();
