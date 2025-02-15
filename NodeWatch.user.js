@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      3.7.1
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location with draggable popup.
 // @author       ShadowKyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -28,14 +28,14 @@
         GO_TO_ASTRAL_BUTTON_TEXT: "Астрал",
         GO_BACK_BUTTON_TEXT: "Вернуться",
         NODE_INPUT_PLACEHOLDER: "Node",
-        CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: ",
+        CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: -",
         ANALYSIS_STATUS_PREFIX: "Анализ локаций: ",
         ANALYSIS_COMPLETE_STATUS: "Анализ локаций завершен",
         ANALYSIS_POPUP_TITLE: "Результаты анализа локаций:",
         ANALYSIS_POPUP_NO_USERS: "<p>Нет пользователей в локациях (кроме вас).</p>",
-        WEBSOCKET_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
-        WEBSOCKET_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
-        WEBSOCKET_CONNECTION_ERROR: "WebSocket: Ошибка соединения",
+        WEBSocket_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
+        WEBSocket_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
+        WEBSocket_CONNECTION_ERROR: "WebSocket: Ошибка соединения",
         USER_JOIN_MESSAGE_PREFIX: "[User Join] ",
         USER_LEFT_MESSAGE_PREFIX: "[User Left] ",
         RETURN_TO_LAST_LOCATION_PREFIX: "Возврат в: ",
@@ -422,7 +422,7 @@
                 position: 'fixed',
                 top: '50%',
                 left: '50%',
-                transform: 'translate(-50%, -50%)',
+                // transform: 'translate(-50%, -50%)', // Removed in v3.7.1
                 backgroundColor: 'rgba(20, 20, 20, 0.9)',
                 color: 'white',
                 padding: '20px',
@@ -432,7 +432,8 @@
                 fontSize: '16px',
                 textAlign: 'left',
                 maxWidth: '400px',
-                boxShadow: '0 4px 8px rgba(0,0,0,0.5)'
+                boxShadow: '0 4px 8px rgba(0,0,0,0.5)',
+                boxSizing: 'border-box' // Added box-sizing: border-box in v3.7.1
             },
             innerHTML: contentHTML
         });
@@ -506,6 +507,50 @@
         _appendCloseIconToPopup(analysisPopup, closeIcon);
 
         document.body.appendChild(analysisPopup);
+
+        // --- Drag and drop logic with boundaries ---
+        let isDragging = false;
+        let offsetX, offsetY;
+
+        analysisPopup.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            offsetX = e.clientX - analysisPopup.offsetLeft;
+            offsetY = e.clientY - analysisPopup.offsetTop;
+            analysisPopup.style.cursor = 'grabbing';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            let newLeft = e.clientX - offsetX;
+            let newTop = e.clientY - offsetY;
+
+            // Boundary checks
+            if (newLeft < 0) {
+                newLeft = 0;
+            }
+            if (newTop < 0) {
+                newTop = 0;
+            }
+            if (newLeft > window.innerWidth - analysisPopup.offsetWidth) {
+                newLeft = window.innerWidth - analysisPopup.offsetWidth;
+            }
+            if (newTop > window.innerHeight - analysisPopup.offsetHeight) {
+                newTop = window.innerHeight - analysisPopup.offsetHeight;
+            }
+
+            analysisPopup.style.left = newLeft + 'px';
+            analysisPopup.style.top = newTop + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            analysisPopup.style.cursor = 'grab';
+            document.body.style.userSelect = 'auto';
+        });
+
+        analysisPopup.style.cursor = 'grab';
     }
 
     /**
@@ -690,7 +735,7 @@
 
         ws.addEventListener('open', () => {
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
-            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_ESTABLISHED);
+            addToOverlayHistory(Config.WEBSocket_CONNECTION_ESTABLISHED);
             clearOverlayInitialMessage();
             analyzeButton.style.display = 'block';
             progressBarContainer.style.display = 'block';
@@ -750,7 +795,7 @@
 
         ws.addEventListener('close', () => {
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
-            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_CLOSED);
+            addToOverlayHistory(Config.WEBSocket_CONNECTION_CLOSED);
             clearAnalysisStatus();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
@@ -762,7 +807,7 @@
 
         ws.addEventListener('error', (error) => {
             console.error('[NodeWatch WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
-            addToOverlayHistory(Config.WEBSOCKET_CONNECTION_ERROR);
+            addToOverlayHistory(Config.WEBSocket_CONNECTION_ERROR);
             clearAnalysisStatus();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
