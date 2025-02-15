@@ -2,6 +2,7 @@
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
 // @version      3.5
+// @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.png
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location.
 // @author       ShadowKyst
 // @match        https://www.fukuro.su/
