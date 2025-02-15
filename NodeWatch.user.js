@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.7.1
+// @version      3.8.2
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Performs automated location scans and returns to the original location with draggable popup.
-// @author       ShadowKyst
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button is now a toggle for "Light" joke with blinking indicator.
+// @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
 // ==/UserScript==
@@ -47,7 +47,13 @@
         WARNING_NODE_INPUT_EMPTY: "Предупреждение: Введите имя Node.",
         ANALYZE_BUTTON_TOOLTIP: "Запустить анализ локаций для поиска РП", // Tooltip for Analyze button
         GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node", // Tooltip for "Astral" button mode
-        GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию" // Tooltip for "Вернуться" button mode
+        GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию", // Tooltip for "Вернуться" button mode
+        JOKES_BUTTON_TEXT: "Приколы", // Text for Jokes button
+        JOKES_BUTTON_TOOLTIP: "Открыть меню приколов", // Tooltip for Jokes button
+        JOKE_BUTTON_LIGHT_TEXT: "Свет", // Text for "Light" joke button
+        JOKE_BUTTON_LIGHT_TOOLTIP: "Включить/выключить свет (для прикола)", // Tooltip for "Light" joke button
+        JOKE_BUTTON_LIGHT_ACTIVE_TEXT: "Свет [ВКЛ]", // Text when "Light" joke is active
+        JOKE_BUTTON_LIGHT_INACTIVE_TEXT: "Свет" // Text when "Light" joke is inactive
     };
 
     /**
@@ -132,6 +138,13 @@
     let nodeInput = null;
     let currentNodeDisplay = null;
     let goToNodeContainer = null;
+
+    // Jokes Button and Menu Variables
+    let jokesButton = null;
+    let jokesMenuContainer = null;
+    let jokeButtonLight = null; // Variable for "Light" joke button
+    let isLightJokeActive = false; // State for "Light" joke toggle
+    let lightJokeIntervalId = null; // Interval ID for blinking and joke requests
 
 
     /**
@@ -422,7 +435,6 @@
                 position: 'fixed',
                 top: '50%',
                 left: '50%',
-                // transform: 'translate(-50%, -50%)', // Removed in v3.7.1
                 backgroundColor: 'rgba(20, 20, 20, 0.9)',
                 color: 'white',
                 padding: '20px',
@@ -433,7 +445,7 @@
                 textAlign: 'left',
                 maxWidth: '400px',
                 boxShadow: '0 4px 8px rgba(0,0,0,0.5)',
-                boxSizing: 'border-box' // Added box-sizing: border-box in v3.7.1
+                boxSizing: 'border-box'
             },
             innerHTML: contentHTML
         });
@@ -563,6 +575,192 @@
         }
     }
 
+    /**
+     * Handles the "Light" joke button click - now a toggle.
+     */
+    function lightToggleJoke() {
+        isLightJokeActive = !isLightJokeActive; // Toggle state
+
+        if (isLightJokeActive) {
+            jokeButtonLight.textContent = Config.JOKE_BUTTON_LIGHT_ACTIVE_TEXT; // Update button text
+            jokeButtonLight.classList.add('blinking-button'); // Add blinking class
+            startLightJokeInterval(); // Start sending joke requests
+
+        } else {
+            jokeButtonLight.textContent = Config.JOKE_BUTTON_LIGHT_INACTIVE_TEXT; // Update button text
+            jokeButtonLight.classList.remove('blinking-button'); // Remove blinking class
+            stopLightJokeInterval(); // Stop sending joke requests
+        }
+    }
+
+    /**
+     * Starts the interval for sending light joke requests.
+     */
+    function startLightJokeInterval() {
+        if (lightJokeIntervalId) {
+            clearInterval(lightJokeIntervalId); // Clear any existing interval
+        }
+        lightJokeIntervalId = setInterval(() => {
+            if (!myInitiatorId) {
+                console.log(Config.INITIATOR_ID_NOT_RECEIVED);
+                addToOverlayHistory(Config.INITIATOR_ID_NOT_RECEIVED);
+                stopLightJokeInterval(); // Stop interval if no initiator ID
+                return;
+            }
+
+            const lightOffMessage = JSON.stringify({
+                "reason": "nodeAction",
+                "initiator": myInitiatorId,
+                "action": { "name": "c_light_off", "from": "light_on", "to": "light_off" }
+            });
+            const lightOnMessage = JSON.stringify({
+                "reason": "nodeAction",
+                "initiator": myInitiatorId,
+                "action": { "name": "c_light_on", "from": "light_off", "to": "light_on" }
+            });
+
+            currentWs.send(lightOffMessage);
+            console.log("[NodeWatch - Joke]: Sending light off request");
+            addToOverlayHistory("[Joke]: Выключаю свет...");
+
+            setTimeout(() => {
+                currentWs.send(lightOnMessage);
+                console.log("[NodeWatch - Joke]: Sending light on request");
+                addToOverlayHistory("[Joke]: Включаю свет...");
+            }, 500); // Small delay for effect
+        }, 1000); // Repeat every 3 seconds
+    }
+
+    /**
+     * Stops the interval for sending light joke requests.
+     */
+    function stopLightJokeInterval() {
+        if (lightJokeIntervalId) {
+            clearInterval(lightJokeIntervalId);
+            lightJokeIntervalId = null;
+        }
+    }
+
+
+    /**
+     * Creates the "Jokes" button and its menu.
+     */
+    function createJokesButtonAndMenu() {
+        jokesButton = Utils.createElement('button', {
+            attributes: { title: Config.JOKES_BUTTON_TOOLTIP },
+            textContent: Config.JOKES_BUTTON_TEXT,
+            styles: {
+                width: '100%',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                border: '1px solid #777',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
+                transition: 'background-color 0.3s ease',
+                height: '35px',
+                boxSizing: 'border-box',
+                marginTop: '5px', // Space between buttons
+                display: 'block' // Ensure it's block for width: 100% to work in flex column
+            }
+        });
+
+        jokesButton.addEventListener('mouseover', () => {
+            jokesButton.style.backgroundColor = 'rgba(70, 70, 70, 0.7)';
+        });
+        jokesButton.addEventListener('mouseout', () => {
+            jokesButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
+        });
+        jokesButton.addEventListener('click', toggleJokesMenu);
+
+
+        jokesMenuContainer = Utils.createElement('div', {
+            styles: {
+                display: 'none', // Initially hidden
+                backgroundColor: 'rgba(30, 30, 30, 0.7)',
+                borderRadius: '5px',
+                marginTop: '5px',
+                padding: '10px',
+                width: '100%',
+                boxSizing: 'border-box',
+                flexDirection: 'column', // Stack menu buttons vertically
+                alignItems: 'stretch' // Stretch buttons to full width
+            }
+        });
+
+        // "Light" Joke Button
+        jokeButtonLight = Utils.createElement('button', { // Assign to module-level variable
+            attributes: { title: Config.JOKE_BUTTON_LIGHT_TOOLTIP },
+            textContent: Config.JOKE_BUTTON_LIGHT_INACTIVE_TEXT, // Initial text - inactive
+            styles: {
+                width: '100%',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                border: '1px solid #777',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxSizing: 'border-box',
+                marginBottom: '5px' // Space between menu buttons
+            }
+        });
+        jokeButtonLight.addEventListener('click', lightToggleJoke); // Add event listener for "Light" joke
+        jokesMenuContainer.appendChild(jokeButtonLight);
+
+
+        const jokeButton2 = Utils.createElement('button', {
+            textContent: 'Прикол 2',
+            styles: {
+                width: '100%',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                border: '1px solid #777',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxSizing: 'border-box',
+                marginBottom: '5px' // Space between menu buttons
+            }
+        });
+        jokesMenuContainer.appendChild(jokeButton2);
+
+        const jokeButton3 = Utils.createElement('button', {
+            textContent: 'Прикол 3',
+            styles: {
+                width: '100%',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                border: '1px solid #777',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxSizing: 'border-box'
+            }
+        });
+        jokesMenuContainer.appendChild(jokeButton3);
+
+
+        goToNodeContainer.appendChild(jokesButton);
+        goToNodeContainer.appendChild(jokesMenuContainer);
+    }
+
+    /**
+     * Toggles the visibility of the jokes menu.
+     */
+    function toggleJokesMenu() {
+        jokesMenuContainer.style.display = (jokesMenuContainer.style.display === 'none' ? 'flex' : 'none');
+    }
+
+
      /**
      * Creates the "Go To Node" button and input elements.
      */
@@ -617,7 +815,8 @@
                 boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
                 transition: 'background-color 0.3s ease',
                 height: '35px',
-                boxSizing: 'border-box'
+                boxSizing: 'border-box',
+                display: 'block' // Ensure it's block for width: 100% to work in flex column
             }
         });
 
@@ -629,6 +828,7 @@
         });
         goToNodeButton.addEventListener('click', handleGoToNodeClick);
         goToNodeContainer.appendChild(goToNodeButton);
+
 
         currentNodeDisplay = Utils.createElement('div', {
             attributes: { id: 'current-node-display' },
@@ -644,7 +844,10 @@
             }
         });
         goToNodeContainer.appendChild(currentNodeDisplay);
+
+        createJokesButtonAndMenu(); // Call function to create Jokes button and menu
     }
+
 
     /**
      * Handles the "Go To Astral" button click.
@@ -819,6 +1022,19 @@
 
         return ws;
     };
+
+    // CSS для мигающей кнопки
+    const style = Utils.createElement('style');
+    style.textContent = `
+        .blinking-button {
+            animation: blinker 1s linear infinite;
+        }
+        @keyframes blinker {
+            50% { opacity: 0.5; }
+        }
+    `;
+    document.head.appendChild(style);
+
 
     console.log('[NodeWatch WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
     createOverlay();
