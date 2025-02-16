@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.8.4
+// @version      3.9
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button toggle, userMap updated from nodeUsers, added "Найти РП" warning.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching).
 // @author       ShadowKyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -401,14 +401,24 @@
             .filter(([, users]) => users.length > 0)
             .sort(([, usersA], [, usersB]) => usersB.length - usersA.length);
 
+        // Sort users within each location: playing first, then watching
+        const sortedLocationsWithState = sortedLocations.map(([node, users]) => {
+            const playingUsers = users.filter(user => user.state === 'playing');
+            const watchingUsers = users.filter(user => user.state === 'watching');
+            return [node, [...playingUsers, ...watchingUsers]];
+        });
+
+
         let popupContentHTML = `<h2>${Config.ANALYSIS_POPUP_TITLE}</h2><div style="max-height: 300px; overflow-y: auto;">`;
 
-        if (sortedLocations.length === 0) {
+        if (sortedLocationsWithState.length === 0) {
             popupContentHTML += Config.ANALYSIS_POPUP_NO_USERS;
         } else {
-            for (const [node, users] of sortedLocations) {
-                const userNames = users.map(user => user.name).join(', ');
-                popupContentHTML += `<p><b>${node}:</b> ${userNames}</p>`;
+            for (const [node, users] of sortedLocationsWithState) {
+                let userNamesWithState = users.map(user => {
+                    return user.state === 'watching' ? `${user.name} (👁️)` : user.name; // Add emoji for watching
+                }).join(', ');
+                popupContentHTML += `<p><b>${node}:</b> ${userNamesWithState}</p>`;
             }
         }
         popupContentHTML += '</div>';
