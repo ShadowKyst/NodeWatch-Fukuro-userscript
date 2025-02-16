@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.9
+// @version      3.9.7-rp-button-visibility
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching).
-// @author       ShadowKyst
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). "Find RP (test)" button visibility fix.
+// @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
 // ==/UserScript==
@@ -21,17 +21,15 @@
         FADE_OUT_DURATION: 500,
         OVERLAY_Z_INDEX: 1000,
         BUTTON_Z_INDEX: 1000,
-        PROGRESS_BAR_Z_INDEX: 1000,
         POPUP_Z_INDEX: 1001,
         DEFAULT_OVERLAY_TEXT: "WebSocket Listener Активен",
-        ANALYZE_BUTTON_TEXT: "Найти РП",
+        ANALYZE_BUTTON_TEXT: "Найти РП (тест)", // Обновленный текст кнопки
+        ANALYZE_BUTTON_TOOLTIP: "Запустить тестовый поиск РП по всем локациям", // Обновленный tooltip
         GO_TO_ASTRAL_BUTTON_TEXT: "Астрал",
         GO_BACK_BUTTON_TEXT: "Вернуться",
         NODE_INPUT_PLACEHOLDER: "Node",
         CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: -",
-        ANALYSIS_STATUS_PREFIX: "Анализ локаций: ",
-        ANALYSIS_COMPLETE_STATUS: "Анализ локаций завершен",
-        ANALYSIS_POPUP_TITLE: "Результаты анализа локаций:",
+        ANALYSIS_POPUP_TITLE: "Результаты поиска РП (тест):", // Обновленный заголовок попапа
         ANALYSIS_POPUP_NO_USERS: "<p>Нет пользователей в локациях (кроме вас).</p>",
         WEBSocket_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
         WEBSocket_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
@@ -40,12 +38,10 @@
         USER_LEFT_MESSAGE_PREFIX: "[User Left] ",
         RETURN_TO_LAST_LOCATION_PREFIX: "Возврат в: ",
         GO_TO_NODE_MESSAGE_PREFIX: "Переход в: ", // New log message for "Astral" navigation
-        LOCATION_ANALYSIS_STARTING: "Начинаю анализ локаций...",
         LOCATION_ANALYSIS_ALREADY_RUNNING: "Анализ уже запущен.",
         INITIATOR_ID_NOT_RECEIVED: "Initiator ID не получен. Перезагрузите страницу.",
         WARNING_NO_CURRENT_LOCATION: "Предупреждение: Невозможно запомнить текущую локацию.",
         WARNING_NODE_INPUT_EMPTY: "Предупреждение: Введите имя Node.",
-        ANALYZE_BUTTON_TOOLTIP: "Запустить анализ локаций для поиска РП", // Tooltip for Analyze button
         GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node", // Tooltip for "Astral" button mode
         GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию", // Tooltip for "Вернуться" button mode
         JOKES_BUTTON_TEXT: "Приколы", // Text for Jokes button
@@ -104,11 +100,8 @@
     let myInitiatorId = null;
     let isFirstMessage = true;
 
-    // Location Analyzer variables
+    // Location Analyzer variables (оставляем только analyzeButton)
     let analyzeButton = null;
-    let progressBarContainer = null;
-    let progressBar = null;
-    let progressText = null;
     const nodeList = [
         "int_lib", "ext_lib", "ext_aidpost", "int_aidpost", "ext_polyana", "ext_path2", "ext_path", "ext_bathhouse", "ext_washstand", "ext_house_of_un",
         "int_house_of_un", "ext_house_of_sam", "int_house_of_sam", "ext_house_of_nas", "int_house_of_nas", "ext_house_of_el", "int_house_of_el",
@@ -127,12 +120,11 @@
         "int_catacombs_tunnel_exit", "int_catacombs_tunnel_laboratory", "ext_circle", "ext_busstation", "ext_enroute", "ext_froad", "ext_forest2",
         "ext_pinery", "ext_bunker", "int_bunker"
     ];
-    let currentNodeIndex = 0;
-    let locationData = {};
     let currentWs = null;
     let analysisPopup = null;
     let lastVisitedNode = null;
-    let analysisStatusDiv = null;
+    let nodeBeforeRPTest = null; // Объявляем переменную для сохранения ноды перед RP Test
+
 
     // New Node Navigation Variables
     let goToNodeButton = null;
@@ -146,6 +138,9 @@
     let jokeButtonLight = null; // Variable for "Light" joke button
     let isLightJokeActive = false; // State for "Light" joke toggle
     let lightJokeIntervalId = null; // Interval ID for blinking and joke requests
+    let rpTestResults = {}; // Object to store results for RP Test - NEW
+    let expectedResponsesCount = 0; // Counter for expected responses in RP Test - NEW
+    let isRPTestRunning = false; // Flag to indicate if RP Test is running - NEW
 
 
     /**
@@ -221,27 +216,6 @@
         }, Config.MESSAGE_TIMEOUT);
     }
 
-    /**
-     * Sets the analysis status text in the overlay.
-     * @param {string} statusText - The status text to display.
-     */
-    function setAnalysisStatus(statusText) {
-        if (!analysisStatusDiv) {
-            analysisStatusDiv = Utils.createElement('div');
-            overlayDiv.prepend(analysisStatusDiv);
-        }
-        analysisStatusDiv.textContent = statusText;
-    }
-
-    /**
-     * Clears the analysis status text from the overlay.
-     */
-    function clearAnalysisStatus() {
-        if (analysisStatusDiv && overlayDiv.contains(analysisStatusDiv)) {
-            overlayDiv.removeChild(analysisStatusDiv);
-            analysisStatusDiv = null;
-        }
-    }
 
     /**
      * Creates the "Analyze Location" button.
@@ -265,7 +239,7 @@
                 fontSize: '15px',
                 boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
                 transition: 'background-color 0.3s ease',
-                display: 'none',
+                display: 'none', // ИЗМЕНЕНО: на 'none', чтобы кнопка была скрыта изначально
                 width: '150px'
             }
         });
@@ -276,168 +250,11 @@
         analyzeButton.addEventListener('mouseout', () => {
             analyzeButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
         });
-        analyzeButton.addEventListener('click', startLocationAnalysis);
+        analyzeButton.addEventListener('click', startRPTestAnalysis); // ИЗМЕНЕНО: теперь вызывает startRPTestAnalysis
 
         document.body.appendChild(analyzeButton);
-        createProgressBar();
     }
 
-    /**
-     * Creates the progress bar elements.
-     */
-    function createProgressBar() {
-        progressBarContainer = Utils.createElement('div', {
-            styles: {
-                position: 'fixed',
-                top: '45px',
-                left: '10px',
-                width: '150px',
-                height: '10px',
-                backgroundColor: 'rgba(100, 100, 100, 0.3)',
-                borderRadius: '5px',
-                overflow: 'hidden',
-                zIndex: Config.PROGRESS_BAR_Z_INDEX,
-                display: 'none'
-            }
-        });
-        document.body.appendChild(progressBarContainer);
-
-        progressBar = Utils.createElement('div', {
-            styles: {
-                width: '0%',
-                height: '100%',
-                backgroundColor: 'rgba(0, 150, 0, 0.7)'
-            }
-        });
-        progressBarContainer.appendChild(progressBar);
-
-        progressText = Utils.createElement('div', {
-            textContent: '0%',
-            styles: {
-                position: 'fixed',
-                top: '45px',
-                left: '170px',
-                color: '#eee',
-                fontSize: '12px',
-                fontFamily: 'sans-serif',
-                zIndex: Config.PROGRESS_BAR_Z_INDEX,
-                display: 'none'
-            }
-        });
-        document.body.appendChild(progressText);
-    }
-
-    /**
-     * Updates the progress bar and text.
-     * @param {number} percentage - The progress percentage (0-100).
-     */
-    function updateProgressBar(percentage) {
-        progressBar.style.width = `${percentage}%`;
-        progressText.textContent = `${percentage}%`;
-    }
-
-    /**
-     * Starts the location analysis process.
-     */
-    function startLocationAnalysis() {
-        if (ScriptState.isAnalyzing) {
-            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
-            return;
-        }
-        if (!myInitiatorId) {
-            console.log(Config.INITIATOR_ID_NOT_RECEIVED);
-            return;
-        }
-        if (!lastVisitedNode) { // Check if lastVisitedNode is null
-            addToOverlayHistory(Config.WARNING_NO_LAST_LOCATION_FOR_ANALYSIS); // Show warning
-            console.warn(Config.WARNING_NO_LAST_LOCATION_FOR_ANALYSIS);
-            return; // Exit function early if lastVisitedNode is null
-        }
-
-        ScriptState.isAnalyzing = true;
-        locationData = {};
-        currentNodeIndex = 0;
-        ScriptState.isTrackingNode = false;
-        updateProgressBar(0);
-        console.log(Config.LOCATION_ANALYSIS_STARTING);
-        setAnalysisStatus(Config.ANALYSIS_STATUS_PREFIX + nodeList[0]); // Initial status
-        analyzeNextLocation();
-    }
-
-    /**
-     * Analyzes the next location in the nodeList.
-     */
-    function analyzeNextLocation() {
-        if (currentNodeIndex < nodeList.length) {
-            const node = nodeList[currentNodeIndex];
-            setAnalysisStatus(Config.ANALYSIS_STATUS_PREFIX + node);
-
-            const roomChangeMessage = {
-                "reason": "roomChange",
-                "initiator": myInitiatorId,
-                "node": node
-            };
-            currentWs.send(JSON.stringify(roomChangeMessage));
-            console.log(`Запрос roomChange отправлен для node: ${node}`);
-
-            const progressPercentage = Math.round(((currentNodeIndex + 1) / nodeList.length) * 100);
-            updateProgressBar(progressPercentage);
-        } else {
-            finishLocationAnalysis();
-        }
-    }
-
-    /**
-     * Finishes the location analysis, displays results, and returns to the last visited node.
-     */
-    function finishLocationAnalysis() {
-        ScriptState.isAnalyzing = false;
-        setAnalysisStatus(Config.ANALYSIS_COMPLETE_STATUS);
-        updateProgressBar(100);
-        console.log(Config.ANALYSIS_COMPLETE_STATUS);
-
-        const sortedLocations = Object.entries(locationData)
-            .map(([node, users]) => [node, users.filter(user => user.id !== myInitiatorId)])
-            .filter(([, users]) => users.length > 0)
-            .sort(([, usersA], [, usersB]) => usersB.length - usersA.length);
-
-        // Sort users within each location: playing first, then watching
-        const sortedLocationsWithState = sortedLocations.map(([node, users]) => {
-            const playingUsers = users.filter(user => user.state === 'playing');
-            const watchingUsers = users.filter(user => user.state === 'watching');
-            return [node, [...playingUsers, ...watchingUsers]];
-        });
-
-
-        let popupContentHTML = `<h2>${Config.ANALYSIS_POPUP_TITLE}</h2><div style="max-height: 300px; overflow-y: auto;">`;
-
-        if (sortedLocationsWithState.length === 0) {
-            popupContentHTML += Config.ANALYSIS_POPUP_NO_USERS;
-        } else {
-            for (const [node, users] of sortedLocationsWithState) {
-                let userNamesWithState = users.map(user => {
-                    return user.state === 'watching' ? `${user.name} (👁️)` : user.name; // Add emoji for watching
-                }).join(', ');
-                popupContentHTML += `<p><b>${node}:</b> ${userNamesWithState}</p>`;
-            }
-        }
-        popupContentHTML += '</div>';
-
-        createAnalysisPopup(popupContentHTML);
-
-        if (lastVisitedNode) {
-            const returnRoomChangeMessage = {
-                "reason": "roomChange",
-                "initiator": myInitiatorId,
-                "node": lastVisitedNode
-            };
-            currentWs.send(JSON.stringify(returnRoomChangeMessage));
-            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${lastVisitedNode}`);
-            addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${lastVisitedNode}`);
-        }
-        ScriptState.isTrackingNode = true;
-        setTimeout(clearAnalysisStatus, Config.MESSAGE_TIMEOUT);
-    }
 
     /**
      * Creates the analysis results popup element.
@@ -784,7 +601,7 @@
         goToNodeContainer = Utils.createElement('div', {
             styles: {
                 position: 'fixed',
-                top: '70px',
+                top: '50px',
                 left: '10px',
                 zIndex: Config.BUTTON_Z_INDEX,
                 display: 'none',
@@ -862,6 +679,7 @@
         goToNodeContainer.appendChild(currentNodeDisplay);
 
         createJokesButtonAndMenu(); // Call function to create Jokes button and menu
+        document.body.appendChild(goToNodeContainer); // Append container to body here, after jokes menu is created
     }
 
 
@@ -931,6 +749,93 @@
         }
     }
 
+    /**
+     * Starts the "Find RP (test)" analysis.
+     */
+    function startRPTestAnalysis() {
+        if (isRPTestRunning) {
+            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING); // Reusing existing constant for similar message
+            addToOverlayHistory(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
+            return;
+        }
+        if (!myInitiatorId) {
+            console.log(Config.INITIATOR_ID_NOT_RECEIVED);
+            addToOverlayHistory(Config.INITIATOR_ID_NOT_RECEIVED);
+            return;
+        }
+        if (!lastVisitedNode) {
+            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            return;
+        }
+
+        nodeBeforeRPTest = lastVisitedNode;
+        ScriptState.isTrackingNode = false;
+        isRPTestRunning = true;
+        rpTestResults = {};
+        expectedResponsesCount = nodeList.length;
+        addToOverlayHistory("Идет поиск РП... (тест)");
+        console.log("[NodeWatch - RP Test]: Starting RP Test Analysis...");
+
+        // Send roomChange requests for all nodes immediately
+        nodeList.forEach(node => {
+            const roomChangeMessage = {
+                "reason": "roomChange",
+                "initiator": myInitiatorId,
+                "node": node
+            };
+            currentWs.send(JSON.stringify(roomChangeMessage));
+            console.log(`[NodeWatch - RP Test]: Sent roomChange for node: ${node}`);
+        });
+    }
+
+    /**
+     * Analyzes the results of the "Find RP (test)" and displays them in a popup.
+     */
+    function analyzeRPTestResults() {
+        console.log("[NodeWatch - RP Test]: Analyzing RP Test Results...");
+        const sortedLocations = Object.entries(rpTestResults)
+            .map(([node, users]) => [node, users.filter(user => user.id !== myInitiatorId)])
+            .filter(([, users]) => users.length > 0)
+            .sort(([, usersA], [, usersB]) => usersB.length - usersA.length);
+
+        // Sort users within each location: playing first, then watching
+        const sortedLocationsWithState = sortedLocations.map(([node, users]) => {
+            const playingUsers = users.filter(user => user.state === 'playing');
+            const watchingUsers = users.filter(user => user.state === 'watching');
+            return [node, [...playingUsers, ...watchingUsers]];
+        });
+
+        let popupContentHTML = `<h2>${Config.ANALYSIS_POPUP_TITLE}</h2><div style="max-height: 300px; overflow-y: auto;">`;
+
+        if (sortedLocationsWithState.length === 0) {
+            popupContentHTML += Config.ANALYSIS_POPUP_NO_USERS;
+        } else {
+            for (const [node, users] of sortedLocationsWithState) {
+                let userNamesWithState = users.map(user => {
+                    return user.state === 'watching' ? `${user.name} (👁️)` : user.name;
+                }).join(', ');
+                popupContentHTML += `<p><b>${node}:</b> ${userNamesWithState}</p>`;
+            }
+        }
+        popupContentHTML += '</div>';
+
+        createAnalysisPopup(popupContentHTML);
+        ScriptState.isTrackingNode = true;
+
+        if (nodeBeforeRPTest) {
+            const returnRoomChangeMessage = {
+                "reason": "roomChange",
+                "initiator": myInitiatorId,
+                "node": nodeBeforeRPTest
+            };
+            currentWs.send(JSON.stringify(returnRoomChangeMessage));
+            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
+            addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
+            nodeBeforeRPTest = null;
+        }
+    }
+
 
     window.WebSocket = function(url, protocols) {
         currentWs = new originalWebSocket(url, protocols);
@@ -956,11 +861,8 @@
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
             addToOverlayHistory(Config.WEBSocket_CONNECTION_ESTABLISHED);
             clearOverlayInitialMessage();
-            analyzeButton.style.display = 'block';
-            progressBarContainer.style.display = 'block';
-            progressText.style.display = 'block';
+            analyzeButton.style.display = 'block'; // Кнопка "Найти РП" видна сразу
             goToNodeContainer.style.display = 'flex';
-            document.body.appendChild(goToNodeContainer);
         });
 
         ws.addEventListener('message', function(event) {
@@ -1005,12 +907,37 @@
                             console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap.`);
                         }
                     });
-                    if (ScriptState.isAnalyzing) {
-                        const node = nodeList[currentNodeIndex];
-                        locationData[node] = data.users;
-                        console.log(`Получены nodeUsers для node: ${node}, пользователей: ${data.users.length}`);
-                        currentNodeIndex++;
-                        analyzeNextLocation();
+                    if (isRPTestRunning) { // Обработка nodeUsers для "Найти РП (тест)" - NEW
+                        if (expectedResponsesCount > 0) { // Check if we are still expecting responses
+                            if (data.users && data.users.length > 0 && data.users[0].node) { // Check for users and node data
+                                const nodeName = data.users[0].node; // Get node name from first user
+
+                                if (!rpTestResults[nodeName]) { // Check if we already processed response for this node
+                                    rpTestResults[nodeName] = data.users; // Store results
+                                    expectedResponsesCount--; // Decrement counter
+
+                                    console.log(`[NodeWatch - RP Test]: Received nodeUsers for node: ${nodeName}, remaining responses: ${expectedResponsesCount}`);
+
+                                    if (expectedResponsesCount === 0) { // All responses received?
+                                        console.log("[NodeWatch - RP Test]: All nodeUsers responses received. Starting analysis.");
+                                        isRPTestRunning = false; // End RP Test mode
+                                        addToOverlayHistory("Поиск РП завершен (тест)."); // Overlay message
+                                        analyzeRPTestResults(); // Analyze and display results
+                                    }
+                                } else {
+                                    console.warn(`[NodeWatch - RP Test]: Duplicate nodeUsers response received for node: ${nodeName}. Ignoring.`);
+                                }
+                            } else {
+                                console.warn("[NodeWatch - RP Test]: Invalid nodeUsers response format or no users in response to determine node.", event.data);
+                                expectedResponsesCount--; // Decrement even on error to prevent hang
+                                if (expectedResponsesCount < 0) expectedResponsesCount = 0; // Safety for counter errors
+                                if (expectedResponsesCount === 0) { // Check for completion after error handling
+                                    isRPTestRunning = false;
+                                    addToOverlayHistory("Поиск РП завершен (тест). (Возможны ошибки при получении данных)");
+                                    analyzeRPTestResults();
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e) {
@@ -1022,25 +949,21 @@
         ws.addEventListener('close', () => {
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
             addToOverlayHistory(Config.WEBSocket_CONNECTION_CLOSED);
-            clearAnalysisStatus();
+            clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
+            isRPTestRunning = false; // Ensure RP Test flag is reset on close - NEW
             goToNodeContainer.style.display = 'none';
-            if (goToNodeContainer.parentNode === document.body) {
-                document.body.removeChild(goToNodeContainer);
-            }
         });
 
         ws.addEventListener('error', (error) => {
             console.error('[NodeWatch WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
             addToOverlayHistory(Config.WEBSocket_CONNECTION_ERROR);
-            clearAnalysisStatus();
+            clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
+            isRPTestRunning = false; // Ensure RP Test flag is reset on error - NEW
             goToNodeContainer.style.display = 'none';
-            if (goToNodeContainer.parentNode === document.body) {
-                document.body.removeChild(goToNodeContainer);
-            }
         });
 
         return ws;
