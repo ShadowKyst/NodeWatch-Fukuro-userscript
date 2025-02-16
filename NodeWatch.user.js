@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.8.3
+// @version      3.8.4
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button toggle, userMap updated from nodeUsers.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button toggle, userMap updated from nodeUsers, added "Найти РП" warning.
 // @author       ShadowKyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -53,7 +53,8 @@
         JOKE_BUTTON_LIGHT_TEXT: "Свет", // Text for "Light" joke button
         JOKE_BUTTON_LIGHT_TOOLTIP: "Включить/выключить свет (для прикола)", // Tooltip for "Light" joke button
         JOKE_BUTTON_LIGHT_ACTIVE_TEXT: "Свет [ВКЛ]", // Text when "Light" joke is active
-        JOKE_BUTTON_LIGHT_INACTIVE_TEXT: "Свет" // Text when "Light" joke is inactive
+        JOKE_BUTTON_LIGHT_INACTIVE_TEXT: "Свет", // Text when "Light" joke is inactive
+        WARNING_NO_LAST_LOCATION_FOR_ANALYSIS: "Предупреждение: Невозможно вернуться в последнюю локацию после анализа, так как она не запомнена." // Warning for Analyze Button
     };
 
     /**
@@ -346,6 +347,11 @@
         if (!myInitiatorId) {
             console.log(Config.INITIATOR_ID_NOT_RECEIVED);
             return;
+        }
+        if (!lastVisitedNode) { // Check if lastVisitedNode is null
+            addToOverlayHistory(Config.WARNING_NO_LAST_LOCATION_FOR_ANALYSIS); // Show warning
+            console.warn(Config.WARNING_NO_LAST_LOCATION_FOR_ANALYSIS);
+            return; // Exit function early if lastVisitedNode is null
         }
 
         ScriptState.isAnalyzing = true;
