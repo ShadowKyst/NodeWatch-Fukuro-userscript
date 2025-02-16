@@ -601,7 +601,7 @@
         goToNodeContainer = Utils.createElement('div', {
             styles: {
                 position: 'fixed',
-                top: '70px',
+                top: '50px',
                 left: '10px',
                 zIndex: Config.BUTTON_Z_INDEX,
                 display: 'none',
