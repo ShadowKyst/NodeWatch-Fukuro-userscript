@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.9.7-rp-button-visibility
+// @version      4.0
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). "Find RP (test)" button visibility fix.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility.
 // @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -23,13 +23,13 @@
         BUTTON_Z_INDEX: 1000,
         POPUP_Z_INDEX: 1001,
         DEFAULT_OVERLAY_TEXT: "WebSocket Listener Активен",
-        ANALYZE_BUTTON_TEXT: "Найти РП (тест)", // Обновленный текст кнопки
-        ANALYZE_BUTTON_TOOLTIP: "Запустить тестовый поиск РП по всем локациям", // Обновленный tooltip
+        ANALYZE_BUTTON_TEXT: "Найти РП", // Обновленный текст кнопки
+        ANALYZE_BUTTON_TOOLTIP: "Запустить поиск РП по всем локациям", // Обновленный tooltip
         GO_TO_ASTRAL_BUTTON_TEXT: "Астрал",
         GO_BACK_BUTTON_TEXT: "Вернуться",
         NODE_INPUT_PLACEHOLDER: "Node",
         CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: -",
-        ANALYSIS_POPUP_TITLE: "Результаты поиска РП (тест):", // Обновленный заголовок попапа
+        ANALYSIS_POPUP_TITLE: "Результаты поиска РП:", // Обновленный заголовок попапа
         ANALYSIS_POPUP_NO_USERS: "<p>Нет пользователей в локациях (кроме вас).</p>",
         WEBSocket_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
         WEBSocket_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
@@ -167,7 +167,7 @@
                 flexDirection: 'column',
                 justifyContent: 'flex-end'
             },
-            textContent: Config.DEFAULT_OVERlay_TEXT
+            textContent: Config.DEFAULT_OVERLAY_TEXT // <-- Используем константу для начального текста
         });
         document.body.appendChild(overlayDiv);
     }
@@ -222,7 +222,7 @@
      */
     function createAnalyzeButton() {
         analyzeButton = Utils.createElement('button', {
-            attributes: { title: Config.ANALYZE_BUTTON_TOOLTIP }, // Add tooltip
+            attributes: { title: Config.ANALYZE_BUTTON_TOOLTIP },
             textContent: Config.ANALYZE_BUTTON_TEXT,
             styles: {
                 position: 'fixed',
@@ -601,7 +601,7 @@
         goToNodeContainer = Utils.createElement('div', {
             styles: {
                 position: 'fixed',
-                top: '50px',
+                top: '70px',
                 left: '10px',
                 zIndex: Config.BUTTON_Z_INDEX,
                 display: 'none',
@@ -709,10 +709,9 @@
             "node": targetNode
         };
         currentWs.send(JSON.stringify(roomChangeMessage));
-        console.log(`Запрос roomChange отправлен для node: ${targetNode}`);
         addToOverlayHistory(`${Config.GO_TO_NODE_MESSAGE_PREFIX} ${targetNode}`); // Log "Astral" navigation
         goToNodeButton.textContent = Config.GO_BACK_BUTTON_TEXT;
-        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_BACK; // Change tooltip
+        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_BACK;
         ScriptState.goToNodeButtonMode = 'back';
     }
 
@@ -728,11 +727,10 @@
                 "node": ScriptState.originalNode
             };
             currentWs.send(JSON.stringify(returnRoomChangeMessage));
-            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${ScriptState.originalNode}`);
             addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${ScriptState.originalNode}`);
         }
         goToNodeButton.textContent = Config.GO_TO_ASTRAL_BUTTON_TEXT;
-        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL; // Change tooltip back
+        goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL;
         ScriptState.goToNodeButtonMode = 'astral';
         ScriptState.originalNode = null;
     }
@@ -754,7 +752,7 @@
      */
     function startRPTestAnalysis() {
         if (isRPTestRunning) {
-            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING); // Reusing existing constant for similar message
+            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
             addToOverlayHistory(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
             return;
         }
@@ -774,7 +772,7 @@
         isRPTestRunning = true;
         rpTestResults = {};
         expectedResponsesCount = nodeList.length;
-        addToOverlayHistory("Идет поиск РП... (тест)");
+        addToOverlayHistory("Идет поиск РП...");
         console.log("[NodeWatch - RP Test]: Starting RP Test Analysis...");
 
         // Send roomChange requests for all nodes immediately
@@ -830,7 +828,6 @@
                 "node": nodeBeforeRPTest
             };
             currentWs.send(JSON.stringify(returnRoomChangeMessage));
-            console.log(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
             addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
             nodeBeforeRPTest = null;
         }
@@ -861,7 +858,7 @@
             console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
             addToOverlayHistory(Config.WEBSocket_CONNECTION_ESTABLISHED);
             clearOverlayInitialMessage();
-            analyzeButton.style.display = 'block'; // Кнопка "Найти РП" видна сразу
+            analyzeButton.style.display = 'block';
             goToNodeContainer.style.display = 'flex';
         });
 
@@ -921,7 +918,7 @@
                                     if (expectedResponsesCount === 0) { // All responses received?
                                         console.log("[NodeWatch - RP Test]: All nodeUsers responses received. Starting analysis.");
                                         isRPTestRunning = false; // End RP Test mode
-                                        addToOverlayHistory("Поиск РП завершен (тест)."); // Overlay message
+                                        addToOverlayHistory("Поиск РП завершен."); // Overlay message
                                         analyzeRPTestResults(); // Analyze and display results
                                     }
                                 } else {
@@ -933,7 +930,7 @@
                                 if (expectedResponsesCount < 0) expectedResponsesCount = 0; // Safety for counter errors
                                 if (expectedResponsesCount === 0) { // Check for completion after error handling
                                     isRPTestRunning = false;
-                                    addToOverlayHistory("Поиск РП завершен (тест). (Возможны ошибки при получении данных)");
+                                    addToOverlayHistory("Поиск РП завершен.");
                                     analyzeRPTestResults();
                                 }
                             }
@@ -983,7 +980,7 @@
 
 
     console.log('[NodeWatch WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
-    createOverlay();
+    createOverlay(); // <--  Убедитесь, что эта строка есть и не закомментирована!
     createAnalyzeButton();
     createGoToNodeButton();
 })();
