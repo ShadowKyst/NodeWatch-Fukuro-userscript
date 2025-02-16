@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      3.8.2
+// @version      3.8.3
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button is now a toggle for "Light" joke with blinking indicator.
-// @author       Shadowkyst
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Jokes button toggle, userMap updated from nodeUsers.
+// @author       ShadowKyst
 // @match        https://www.fukuro.su/
 // @grant        none
 // ==/UserScript==
@@ -171,7 +171,7 @@
                 flexDirection: 'column',
                 justifyContent: 'flex-end'
             },
-            textContent: Config.DEFAULT_OVERLAY_TEXT
+            textContent: Config.DEFAULT_OVERlay_TEXT
         });
         document.body.appendChild(overlayDiv);
     }
@@ -627,8 +627,8 @@
                 currentWs.send(lightOnMessage);
                 console.log("[NodeWatch - Joke]: Sending light on request");
                 addToOverlayHistory("[Joke]: Включаю свет...");
-            }, 500); // Small delay for effect
-        }, 1000); // Repeat every 3 seconds
+            }, 1000); // Small delay for effect
+        }, 3000); // Repeat every 3 seconds
     }
 
     /**
@@ -982,6 +982,13 @@
                     delete userMap[userIdLeft];
 
                 } else if (data.reason === 'nodeUsers') {
+                    console.log('[NodeWatch WebSocket Listener - Обнаружено nodeUsers сообщение. Обновление userMap из nodeUsers.');
+                    data.users.forEach(user => {
+                        if (user.id && user.name && user.id !== myInitiatorId) {
+                            userMap[user.id] = user.name;
+                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap.`);
+                        }
+                    });
                     if (ScriptState.isAnalyzing) {
                         const node = nodeList[currentNodeIndex];
                         locationData[node] = data.users;
