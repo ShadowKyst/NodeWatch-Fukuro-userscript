@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      4.3.5
+// @version      4.3.7
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, and current location for character switch.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, current location for character switch, and fixes for edge cases.
 // @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -40,7 +40,7 @@
         GO_TO_NODE_MESSAGE_PREFIX: "Переход в: ",
         LOCATION_ANALYSIS_ALREADY_RUNNING: "Анализ уже запущен.",
         INITIATOR_ID_NOT_RECEIVED: "Initiator ID не получен. Перезагрузите страницу.",
-        WARNING_NO_CURRENT_LOCATION: "Предупреждение: Невозможно запомнить текущую локацию.",
+        WARNING_NO_CURRENT_LOCATION: "Предупреждение: Невозможно скопировать персонажа, не запомнив текущую локацию. Перейдите в другую локацию и вернитесь.",
         WARNING_NODE_INPUT_EMPTY: "Предупреждение: Введите имя Node.",
         GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node",
         GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию",
@@ -512,6 +512,8 @@
         if (usersInLocation.length === 0) {
             characterListHTML += "<p>Нет других персонажей на локации.</p>";
         } else {
+            characterListHTML += `<button id="return-original-button" style="width: 100%; padding: 8px 15px; border-radius: 5px; border: 1px solid #777; background-color: rgba(50, 50, 50, 0.6); color: #eee; cursor: pointer; font-family: serif; font-size: 15px; box-sizing: border-box; display: block; margin-bottom: 10px;">${Config.RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT}</button>`; // Вернуть себя button at the top
+
             usersInLocation.forEach(userProfile => {
                 if (userProfile.id !== myInitiatorId) { // Exclude current user from the list
                     characterListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555;">
@@ -523,9 +525,6 @@
             });
         }
         characterListHTML += '</div>';
-
-        // Add "Return Original Character" Button inside the popup
-        characterListHTML += `<button id="return-original-button" style="width: 100%; padding: 8px 15px; border-radius: 5px; border: 1px solid #777; background-color: rgba(50, 50, 50, 0.6); color: #eee; cursor: pointer; font-family: serif; font-size: 15px; box-sizing: border-box; display: block; margin: 0 auto;">${Config.RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT}</button>`;
 
 
         characterListPopup = _createPopupElement(characterListHTML);
@@ -553,11 +552,10 @@
     function rerenderCharacterListPopup() {
         if (!characterListPopup || !characterListPopupContent) return;
 
-        let characterListHTML = '';
+        let characterListHTML = `<button id="return-original-button" style="width: 100%; padding: 8px 15px; border-radius: 5px; border: 1px solid #777; background-color: rgba(50, 50, 50, 0.6); color: #eee; cursor: pointer; font-family: serif; font-size: 15px; box-sizing: border-box; display: block; margin-bottom: 10px;">${Config.RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT}</button>`; // Вернуть себя button at the top
+
         const usersInLocation = Object.values(ScriptState.locationUsers);
-        if (usersInLocation.length === 0) {
-            characterListHTML += "<p>Нет других персонажей на локации.</p>";
-        } else {
+        if (usersInLocation.length > 0) {
             usersInLocation.forEach(userProfile => {
                 if (userProfile.id !== myInitiatorId) { // Exclude current user from the list
                     characterListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555;">
@@ -567,8 +565,14 @@
                                      </div>`;
                 }
             });
+        } else {
+            characterListHTML += "<p>Нет других персонажей на локации.</p>";
         }
         characterListPopupContent.innerHTML = characterListHTML; // Update content
+
+        // Re-bind event listeners for new "Return Original Character" button
+        const returnOriginalButton = characterListPopup.querySelector('#return-original-button');
+        returnOriginalButton.addEventListener('click', returnOriginalCharacterJoke);
 
         // Re-bind event listeners for new "Copy Character" buttons
         const copyButtons = characterListPopup.querySelectorAll('.copy-char-button');
@@ -601,58 +605,93 @@
      * @param {string} userId - The ID of the user to copy.
      */
     window.copyCharacterProfile = function(userId) {
+        if (!lastVisitedNode) {
+            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            return;
+        }
+        ScriptState.isTrackingNode = false; // Disable location tracking before relocation
+
         closeCharacterListPopup();
         const profileToCopy = ScriptState.locationUsers[userId];
 
         if (profileToCopy) {
             addToOverlayHistory(Config.COPYING_CHARACTER_OVERLAY_MESSAGE);
             console.log(`[NodeWatch - Joke]: Copying character profile for user ID: ${userId}`);
-            console.log("[NodeWatch - Joke]: Profile to copy:", profileToCopy); // Debug Log
+            console.log("[NodeWatch - Joke]: Profile to copy:", profileToCopy);
 
-            // Create a copy of the profile to avoid modifying the original
+            // -- Relocation Workaround --
+            const bunkerNode = "int_bunker"; // Temporary node
+            const originalLocationNode = lastVisitedNode; // Store original location
+
+            const goToBunkerMessage = { // Move to bunker first
+                "reason": "roomChange",
+                "initiator": myInitiatorId,
+                "node": bunkerNode
+            };
+            currentWs.send(JSON.stringify(goToBunkerMessage));
+            addToOverlayHistory(`[NodeWatch - Joke]: Перемещаюсь в ${bunkerNode} для смены персонажа...`);
             const profileToSend = { ...profileToCopy };
+
 
             const userInitMessage = {
                 "reason": "userInit",
                 "name": profileToSend.name,
                 "color": profileToSend.color,
                 "sprite": profileToSend.sprite,
-                "node": lastVisitedNode, // <---- Use lastVisitedNode here
+                "node": bunkerNode, // Set node to bunker initially
                 "position": profileToSend.position,
                 "is_fliped": profileToSend.is_fliped,
                 "user_info": originalUserInitData ? originalUserInitData.user_info : "unknown", // Use original user_info if available
                 "additional": profileToSend.additional
             };
 
-            console.log("[NodeWatch - Joke]: userInitMessage:", userInitMessage); // Debug log before send
+            console.log("[NodeWatch - Joke]: userInitMessage:", userInitMessage);
             currentWs.send(JSON.stringify(userInitMessage));
 
-            // Send updatePlayerState after copying - using "watching" state for copied characters
             const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
             currentWs.send(JSON.stringify(updateStateMessage));
             console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
 
-            // Send userMove after copying
             const userMoveMessage = { "reason": "userMove", "position": profileToCopy.position || "" }; // Use empty string as default if position is missing
             currentWs.send(JSON.stringify(userMoveMessage));
             console.log("[NodeWatch - Joke]: Sending userMove message:", userMoveMessage);
 
+            // After userInit, move back to original location
+            const returnToOriginalLocationMessage = {
+                "reason": "roomChange",
+                "initiator": myInitiatorId,
+                "node": originalLocationNode
+            };
+            currentWs.send(JSON.stringify(returnToOriginalLocationMessage));
+            addToOverlayHistory(`[NodeWatch - Joke]: Возвращаюсь в ${originalLocationNode}...`);
+            ScriptState.isTrackingNode = true; // Re-enable location tracking after return
 
             addToOverlayHistory(Config.CHARACTER_COPY_SUCCESSFUL_OVERLAY);
             console.log("[NodeWatch - Joke]: userInit message sent to impersonate character.");
+
+
+
+
         } else {
             console.warn(`[NodeWatch - Joke]: Profile for user ID ${userId} not found.`);
             addToOverlayHistory("[Joke]: Ошибка копирования.");
+            ScriptState.isTrackingNode = true; // Re-enable location tracking in case of error
         }
     };
 
     /**
      * Handles the "Return Original Character" joke button click.
      */
-    function returnOriginalCharacterJoke() {
+    window.returnOriginalCharacterJoke = function() {
         if (!originalUserInitData) {
             console.warn("[NodeWatch - Joke]: Original userInit data not available.");
             addToOverlayHistory("[Joke]: Нет данных об изначальном персонаже.");
+            return;
+        }
+        if (!lastVisitedNode) {
+            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
             return;
         }
 
@@ -660,6 +699,18 @@
         addToOverlayHistory("[Joke]: Возвращаю изначального персонажа...");
         console.log("[NodeWatch - Joke]: Returning to original character.");
         console.log("[NodeWatch - Joke]: Sending original userInit message:", originalUserInitData); // Debug log
+
+        const bunkerNode = "int_bunker"; // Temporary node
+        const originalLocationNode = lastVisitedNode; // Store original location
+
+        const goToBunkerMessage = { // Move to bunker first
+            "reason": "roomChange",
+            "initiator": myInitiatorId,
+            "node": bunkerNode
+        };
+        currentWs.send(JSON.stringify(goToBunkerMessage));
+        addToOverlayHistory(`[NodeWatch - Joke]: Перемещаюсь в ${bunkerNode} для смены персонажа...`);
+
 
         const userInitMessage = {
             "reason": "userInit",
@@ -679,6 +730,14 @@
         const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
         currentWs.send(JSON.stringify(updateStateMessage));
         console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
+
+        const returnToOriginalLocationMessage = {
+            "reason": "roomChange",
+            "initiator": myInitiatorId,
+            "node": originalLocationNode
+        };
+        currentWs.send(JSON.stringify(returnToOriginalLocationMessage));
+        addToOverlayHistory(`[NodeWatch - Joke]: Возвращаюсь в ${originalLocationNode}...`);
 
 
         addToOverlayHistory("[Joke]: Изначальный персонаж восстановлен!");
@@ -1145,7 +1204,7 @@
                         if (user.id && user.name && user.id !== myInitiatorId) {
                             userMap[user.id] = user.name;
                             ScriptState.locationUsers[user.id] = user; // Store full user profile
-                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.`);
+                            console.log('[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.');
                         }
                     });
                     rerenderCharacterListPopup(); // Update the popup list after nodeUsers
