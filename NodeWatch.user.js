@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.1
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility.
 // @author       Shadowkyst
@@ -860,6 +860,17 @@
             clearOverlayInitialMessage();
             analyzeButton.style.display = 'block';
             goToNodeContainer.style.display = 'flex';
+
+            // --- Chat Input Maxlength Modification ---
+            let chatInputInterval = setInterval(() => {
+                const chatInput = document.querySelector('#chat-input');
+                if (chatInput) {
+                    chatInput.setAttribute('maxlength', '2000');
+                    console.log('NodeWatch: Chat input maxlength увеличен до 2000');
+                    clearInterval(chatInputInterval);
+                }
+            }, 1000); // Check every 1 second
+            // --- End Chat Input Maxlength Modification ---
         });
 
         ws.addEventListener('message', function(event) {
