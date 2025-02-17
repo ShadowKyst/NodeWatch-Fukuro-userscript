@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      4.1
+// @version      4.3.5
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, and current location for character switch.
 // @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -23,13 +23,13 @@
         BUTTON_Z_INDEX: 1000,
         POPUP_Z_INDEX: 1001,
         DEFAULT_OVERLAY_TEXT: "WebSocket Listener Активен",
-        ANALYZE_BUTTON_TEXT: "Найти РП", // Обновленный текст кнопки
-        ANALYZE_BUTTON_TOOLTIP: "Запустить поиск РП по всем локациям", // Обновленный tooltip
+        ANALYZE_BUTTON_TEXT: "Найти РП",
+        ANALYZE_BUTTON_TOOLTIP: "Запустить поиск РП по всем локациям",
         GO_TO_ASTRAL_BUTTON_TEXT: "Астрал",
         GO_BACK_BUTTON_TEXT: "Вернуться",
         NODE_INPUT_PLACEHOLDER: "Node",
         CURRENT_NODE_TEXT_PREFIX: "Вы сейчас в: -",
-        ANALYSIS_POPUP_TITLE: "Результаты поиска РП:", // Обновленный заголовок попапа
+        ANALYSIS_POPUP_TITLE: "Результаты поиска РП:",
         ANALYSIS_POPUP_NO_USERS: "<p>Нет пользователей в локациях (кроме вас).</p>",
         WEBSocket_CONNECTION_ESTABLISHED: "WebSocket: Соединение установлено",
         WEBSocket_CONNECTION_CLOSED: "WebSocket: Соединение закрыто",
@@ -37,20 +37,28 @@
         USER_JOIN_MESSAGE_PREFIX: "[User Join] ",
         USER_LEFT_MESSAGE_PREFIX: "[User Left] ",
         RETURN_TO_LAST_LOCATION_PREFIX: "Возврат в: ",
-        GO_TO_NODE_MESSAGE_PREFIX: "Переход в: ", // New log message for "Astral" navigation
+        GO_TO_NODE_MESSAGE_PREFIX: "Переход в: ",
         LOCATION_ANALYSIS_ALREADY_RUNNING: "Анализ уже запущен.",
         INITIATOR_ID_NOT_RECEIVED: "Initiator ID не получен. Перезагрузите страницу.",
         WARNING_NO_CURRENT_LOCATION: "Предупреждение: Невозможно запомнить текущую локацию.",
         WARNING_NODE_INPUT_EMPTY: "Предупреждение: Введите имя Node.",
-        GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node", // Tooltip for "Astral" button mode
-        GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию", // Tooltip for "Вернуться" button mode
-        JOKES_BUTTON_TEXT: "Приколы", // Text for Jokes button
-        JOKES_BUTTON_TOOLTIP: "Открыть меню приколов", // Tooltip for Jokes button
-        JOKE_BUTTON_LIGHT_TEXT: "Свет", // Text for "Light" joke button
-        JOKE_BUTTON_LIGHT_TOOLTIP: "Включить/выключить свет (для прикола)", // Tooltip for "Light" joke button
-        JOKE_BUTTON_LIGHT_ACTIVE_TEXT: "Свет [ВКЛ]", // Text when "Light" joke is active
-        JOKE_BUTTON_LIGHT_INACTIVE_TEXT: "Свет", // Text when "Light" joke is inactive
-        WARNING_NO_LAST_LOCATION_FOR_ANALYSIS: "Предупреждение: Невозможно вернуться в последнюю локацию после анализа, так как она не запомнена." // Warning for Analyze Button
+        GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL: "Перейти в указанную Node",
+        GO_TO_NODE_BUTTON_TOOLTIP_BACK: "Вернуться в предыдущую локацию",
+        JOKES_BUTTON_TEXT: "Приколы",
+        JOKES_BUTTON_TOOLTIP: "Открыть меню приколов",
+        JOKE_BUTTON_LIGHT_TEXT: "Свет",
+        JOKE_BUTTON_LIGHT_TOOLTIP: "Включить/выключить свет (для прикола)",
+        JOKE_BUTTON_LIGHT_ACTIVE_TEXT: "Свет [ВКЛ]",
+        JOKE_BUTTON_LIGHT_INACTIVE_TEXT: "Свет",
+        WARNING_NO_LAST_LOCATION_FOR_ANALYSIS: "Предупреждение: Невозможно вернуться в последнюю локацию после анализа, так как она не запомнена.",
+        JOKE_BUTTON_COPY_TEXT: "Персонажи", // Text for "Copy Character" joke button
+        JOKE_BUTTON_COPY_TOOLTIP: "Открыть меню персонажей", // Tooltip for "Copy Character" joke button
+        CHARACTERS_MENU_TITLE: "Персонажи на локации:", // Title for characters menu popup
+        COPY_CHARACTER_BUTTON_TEXT: "Скопировать", // Button text in character menu
+        COPYING_CHARACTER_OVERLAY_MESSAGE: "[Joke]: Копирую персонажа...", // Overlay message when copying character
+        CHARACTER_COPY_SUCCESSFUL_OVERLAY: "[Joke]: Персонаж скопирован!", // Overlay message for successful copy
+        RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT: "Вернуть себя", // New constant
+        RETURN_ORIGINAL_CHARACTER_BUTTON_TOOLTIP: "Вернуть свой изначальный персонаж" // New constant
     };
 
     /**
@@ -90,7 +98,8 @@
         isAnalyzing: false,
         isTrackingNode: true,
         originalNode: null,
-        goToNodeButtonMode: 'astral' // 'astral' или 'back'
+        goToNodeButtonMode: 'astral' ,// 'astral' или 'back'
+        locationUsers: {} // Store users in the current location and their profiles
     };
 
     const originalWebSocket = window.WebSocket;
@@ -99,6 +108,9 @@
     const overlayHistory = [];
     let myInitiatorId = null;
     let isFirstMessage = true;
+    let originalUserInitData = null; // To store initial userInit data
+    let characterListPopupContent = null;
+
 
     // Location Analyzer variables (оставляем только analyzeButton)
     let analyzeButton = null;
@@ -123,7 +135,8 @@
     let currentWs = null;
     let analysisPopup = null;
     let lastVisitedNode = null;
-    let nodeBeforeRPTest = null; // Объявляем переменную для сохранения ноды перед RP Test
+    let nodeBeforeRPTest = null;
+    let characterListPopup = null; // Popup for character list
 
 
     // New Node Navigation Variables
@@ -135,12 +148,13 @@
     // Jokes Button and Menu Variables
     let jokesButton = null;
     let jokesMenuContainer = null;
-    let jokeButtonLight = null; // Variable for "Light" joke button
-    let isLightJokeActive = false; // State for "Light" joke toggle
-    let lightJokeIntervalId = null; // Interval ID for blinking and joke requests
-    let rpTestResults = {}; // Object to store results for RP Test - NEW
-    let expectedResponsesCount = 0; // Counter for expected responses in RP Test - NEW
-    let isRPTestRunning = false; // Flag to indicate if RP Test is running - NEW
+    let jokeButtonLight = null;
+    let isLightJokeActive = false;
+    let lightJokeIntervalId = null;
+    let rpTestResults = {};
+    let expectedResponsesCount = 0;
+    let isRPTestRunning = false;
+    let jokeButtonCopyCharacter = null; // "Скопировать" button
 
 
     /**
@@ -167,7 +181,7 @@
                 flexDirection: 'column',
                 justifyContent: 'flex-end'
             },
-            textContent: Config.DEFAULT_OVERLAY_TEXT // <-- Используем константу для начального текста
+            textContent: Config.DEFAULT_OVERLAY_TEXT
         });
         document.body.appendChild(overlayDiv);
     }
@@ -239,7 +253,7 @@
                 fontSize: '15px',
                 boxShadow: '2px 2px 3px rgba(0,0,0,0.3)',
                 transition: 'background-color 0.3s ease',
-                display: 'none', // ИЗМЕНЕНО: на 'none', чтобы кнопка была скрыта изначально
+                display: 'none',
                 width: '150px'
             }
         });
@@ -250,7 +264,7 @@
         analyzeButton.addEventListener('mouseout', () => {
             analyzeButton.style.backgroundColor = 'rgba(50, 50, 50, 0.6)';
         });
-        analyzeButton.addEventListener('click', startRPTestAnalysis); // ИЗМЕНЕНО: теперь вызывает startRPTestAnalysis
+        analyzeButton.addEventListener('click', startRPTestAnalysis);
 
         document.body.appendChild(analyzeButton);
     }
@@ -405,6 +419,9 @@
         if (analysisPopup) {
             document.body.removeChild(analysisPopup);
             analysisPopup = null;
+        } else if (characterListPopup) {
+            document.body.removeChild(characterListPopup);
+            characterListPopup = null;
         }
     }
 
@@ -474,6 +491,200 @@
         }
     }
 
+    /**
+     * Handles the "Copy Character" joke button click.
+     */
+    function copyCharacterJoke() {
+        openCharacterListPopup();
+    }
+
+    /**
+     * Opens the popup displaying the list of characters in the current location.
+     */
+    function openCharacterListPopup() {
+        if (characterListPopup) {
+            closeCharacterListPopup();
+        }
+
+        let characterListHTML = `<h2>${Config.CHARACTERS_MENU_TITLE}</h2><div id="character-list-content" style="max-height: 300px; overflow-y: auto; margin-bottom: 10px;">`; // Added margin-bottom for button spacing and content id
+
+        const usersInLocation = Object.values(ScriptState.locationUsers);
+        if (usersInLocation.length === 0) {
+            characterListHTML += "<p>Нет других персонажей на локации.</p>";
+        } else {
+            usersInLocation.forEach(userProfile => {
+                if (userProfile.id !== myInitiatorId) { // Exclude current user from the list
+                    characterListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555;">
+                                        <p><b>${userProfile.name}</b></p>
+                                        <button class="copy-char-button" style="padding: 5px 10px; cursor: pointer;"
+                                                data-user-id="${userProfile.id}">${Config.COPY_CHARACTER_BUTTON_TEXT}</button>
+                                     </div>`;
+                }
+            });
+        }
+        characterListHTML += '</div>';
+
+        // Add "Return Original Character" Button inside the popup
+        characterListHTML += `<button id="return-original-button" style="width: 100%; padding: 8px 15px; border-radius: 5px; border: 1px solid #777; background-color: rgba(50, 50, 50, 0.6); color: #eee; cursor: pointer; font-family: serif; font-size: 15px; box-sizing: border-box; display: block; margin: 0 auto;">${Config.RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT}</button>`;
+
+
+        characterListPopup = _createPopupElement(characterListHTML);
+        characterListPopupContent = characterListPopup.querySelector('#character-list-content'); // Store content element
+        const closeIcon = _createCloseIcon();
+        _appendCloseIconToPopup(characterListPopup, closeIcon);
+        document.body.appendChild(characterListPopup);
+
+        // Add event listeners after popup is in DOM
+        const copyButtons = characterListPopup.querySelectorAll('.copy-char-button');
+        copyButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const userId = this.getAttribute('data-user-id');
+                copyCharacterProfile(userId);
+            });
+        });
+
+        const returnOriginalButton = characterListPopup.querySelector('#return-original-button'); // Select button inside popup
+        returnOriginalButton.addEventListener('click', returnOriginalCharacterJoke);
+    }
+
+    /**
+     * Re-renders the character list popup content.
+     */
+    function rerenderCharacterListPopup() {
+        if (!characterListPopup || !characterListPopupContent) return;
+
+        let characterListHTML = '';
+        const usersInLocation = Object.values(ScriptState.locationUsers);
+        if (usersInLocation.length === 0) {
+            characterListHTML += "<p>Нет других персонажей на локации.</p>";
+        } else {
+            usersInLocation.forEach(userProfile => {
+                if (userProfile.id !== myInitiatorId) { // Exclude current user from the list
+                    characterListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555;">
+                                        <p><b>${userProfile.name}</b></p>
+                                        <button class="copy-char-button" style="padding: 5px 10px; cursor: pointer;"
+                                                data-user-id="${userProfile.id}">${Config.COPY_CHARACTER_BUTTON_TEXT}</button>
+                                     </div>`;
+                }
+            });
+        }
+        characterListPopupContent.innerHTML = characterListHTML; // Update content
+
+        // Re-bind event listeners for new "Copy Character" buttons
+        const copyButtons = characterListPopup.querySelectorAll('.copy-char-button');
+        copyButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const userId = this.getAttribute('data-user-id');
+                copyCharacterProfile(userId);
+            });
+        });
+    }
+
+
+    /**
+     * Closes the character list popup.
+     */
+    function closeCharacterListPopup() {
+        if (characterListPopup) {
+            document.body.removeChild(characterListPopup);
+            characterListPopup = null;
+            characterListPopupContent = null; // Clear content reference
+        } else if (analysisPopup) {
+            document.body.removeChild(analysisPopup);
+            analysisPopup = null;
+        }
+    }
+
+    /**
+     * Copies the character profile and sends a userInit message to impersonate.
+     * This function needs to be globally accessible from the HTML onclick event.
+     * @param {string} userId - The ID of the user to copy.
+     */
+    window.copyCharacterProfile = function(userId) {
+        closeCharacterListPopup();
+        const profileToCopy = ScriptState.locationUsers[userId];
+
+        if (profileToCopy) {
+            addToOverlayHistory(Config.COPYING_CHARACTER_OVERLAY_MESSAGE);
+            console.log(`[NodeWatch - Joke]: Copying character profile for user ID: ${userId}`);
+            console.log("[NodeWatch - Joke]: Profile to copy:", profileToCopy); // Debug Log
+
+            // Create a copy of the profile to avoid modifying the original
+            const profileToSend = { ...profileToCopy };
+
+            const userInitMessage = {
+                "reason": "userInit",
+                "name": profileToSend.name,
+                "color": profileToSend.color,
+                "sprite": profileToSend.sprite,
+                "node": lastVisitedNode, // <---- Use lastVisitedNode here
+                "position": profileToSend.position,
+                "is_fliped": profileToSend.is_fliped,
+                "user_info": originalUserInitData ? originalUserInitData.user_info : "unknown", // Use original user_info if available
+                "additional": profileToSend.additional
+            };
+
+            console.log("[NodeWatch - Joke]: userInitMessage:", userInitMessage); // Debug log before send
+            currentWs.send(JSON.stringify(userInitMessage));
+
+            // Send updatePlayerState after copying - using "watching" state for copied characters
+            const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
+            currentWs.send(JSON.stringify(updateStateMessage));
+            console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
+
+            // Send userMove after copying
+            const userMoveMessage = { "reason": "userMove", "position": profileToCopy.position || "" }; // Use empty string as default if position is missing
+            currentWs.send(JSON.stringify(userMoveMessage));
+            console.log("[NodeWatch - Joke]: Sending userMove message:", userMoveMessage);
+
+
+            addToOverlayHistory(Config.CHARACTER_COPY_SUCCESSFUL_OVERLAY);
+            console.log("[NodeWatch - Joke]: userInit message sent to impersonate character.");
+        } else {
+            console.warn(`[NodeWatch - Joke]: Profile for user ID ${userId} not found.`);
+            addToOverlayHistory("[Joke]: Ошибка копирования.");
+        }
+    };
+
+    /**
+     * Handles the "Return Original Character" joke button click.
+     */
+    function returnOriginalCharacterJoke() {
+        if (!originalUserInitData) {
+            console.warn("[NodeWatch - Joke]: Original userInit data not available.");
+            addToOverlayHistory("[Joke]: Нет данных об изначальном персонаже.");
+            return;
+        }
+
+        closeCharacterListPopup(); // Close the popup after clicking "Return Original Character"
+        addToOverlayHistory("[Joke]: Возвращаю изначального персонажа...");
+        console.log("[NodeWatch - Joke]: Returning to original character.");
+        console.log("[NodeWatch - Joke]: Sending original userInit message:", originalUserInitData); // Debug log
+
+        const userInitMessage = {
+            "reason": "userInit",
+            "name": originalUserInitData.name,
+            "color": originalUserInitData.color,
+            "sprite": originalUserInitData.sprite,
+            "node": lastVisitedNode, // <---- Use lastVisitedNode here
+            "position": originalUserInitData.position,
+            "is_fliped": originalUserInitData.is_fliped,
+            "user_info": originalUserInitData.user_info,
+            "additional": originalUserInitData.additional
+        };
+        currentWs.send(JSON.stringify(userInitMessage));
+
+
+        // Send updatePlayerState after returning to original - using original state
+        const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
+        currentWs.send(JSON.stringify(updateStateMessage));
+        console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
+
+
+        addToOverlayHistory("[Joke]: Изначальный персонаж восстановлен!");
+        console.log("[NodeWatch - Joke]: Original userInit message sent.");
+    }
+
 
     /**
      * Creates the "Jokes" button and its menu.
@@ -496,8 +707,8 @@
                 transition: 'background-color 0.3s ease',
                 height: '35px',
                 boxSizing: 'border-box',
-                marginTop: '5px', // Space between buttons
-                display: 'block' // Ensure it's block for width: 100% to work in flex column
+                marginTop: '5px',
+                display: 'block'
             }
         });
 
@@ -512,22 +723,22 @@
 
         jokesMenuContainer = Utils.createElement('div', {
             styles: {
-                display: 'none', // Initially hidden
+                display: 'none',
                 backgroundColor: 'rgba(30, 30, 30, 0.7)',
                 borderRadius: '5px',
                 marginTop: '5px',
                 padding: '10px',
                 width: '100%',
                 boxSizing: 'border-box',
-                flexDirection: 'column', // Stack menu buttons vertically
-                alignItems: 'stretch' // Stretch buttons to full width
+                flexDirection: 'column',
+                alignItems: 'stretch'
             }
         });
 
         // "Light" Joke Button
-        jokeButtonLight = Utils.createElement('button', { // Assign to module-level variable
+        jokeButtonLight = Utils.createElement('button', {
             attributes: { title: Config.JOKE_BUTTON_LIGHT_TOOLTIP },
-            textContent: Config.JOKE_BUTTON_LIGHT_INACTIVE_TEXT, // Initial text - inactive
+            textContent: Config.JOKE_BUTTON_LIGHT_INACTIVE_TEXT,
             styles: {
                 width: '100%',
                 padding: '8px 15px',
@@ -539,15 +750,16 @@
                 fontFamily: 'serif',
                 fontSize: '15px',
                 boxSizing: 'border-box',
-                marginBottom: '5px' // Space between menu buttons
+                marginBottom: '5px'
             }
         });
-        jokeButtonLight.addEventListener('click', lightToggleJoke); // Add event listener for "Light" joke
+        jokeButtonLight.addEventListener('click', lightToggleJoke);
         jokesMenuContainer.appendChild(jokeButtonLight);
 
-
-        const jokeButton2 = Utils.createElement('button', {
-            textContent: 'Прикол 2',
+        // "Copy Character" Joke Button
+        jokeButtonCopyCharacter = Utils.createElement('button', {
+            attributes: { title: Config.JOKE_BUTTON_COPY_TOOLTIP },
+            textContent: Config.JOKE_BUTTON_COPY_TEXT,
             styles: {
                 width: '100%',
                 padding: '8px 15px',
@@ -559,27 +771,11 @@
                 fontFamily: 'serif',
                 fontSize: '15px',
                 boxSizing: 'border-box',
-                marginBottom: '5px' // Space between menu buttons
+                marginBottom: '5px'
             }
         });
-        jokesMenuContainer.appendChild(jokeButton2);
-
-        const jokeButton3 = Utils.createElement('button', {
-            textContent: 'Прикол 3',
-            styles: {
-                width: '100%',
-                padding: '8px 15px',
-                borderRadius: '5px',
-                border: '1px solid #777',
-                backgroundColor: 'rgba(50, 50, 50, 0.6)',
-                color: '#eee',
-                cursor: 'pointer',
-                fontFamily: 'serif',
-                fontSize: '15px',
-                boxSizing: 'border-box'
-            }
-        });
-        jokesMenuContainer.appendChild(jokeButton3);
+        jokeButtonCopyCharacter.addEventListener('click', copyCharacterJoke);
+        jokesMenuContainer.appendChild(jokeButtonCopyCharacter);
 
 
         goToNodeContainer.appendChild(jokesButton);
@@ -633,7 +829,7 @@
         goToNodeContainer.appendChild(nodeInput);
 
         goToNodeButton = Utils.createElement('button', {
-            attributes: { title: Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL }, // Default tooltip for "Astral" mode
+            attributes: { title: Config.GO_TO_NODE_BUTTON_TOOLTIP_ASTRAL },
             textContent: Config.GO_TO_ASTRAL_BUTTON_TEXT,
             styles: {
                 width: '100%',
@@ -649,7 +845,7 @@
                 transition: 'background-color 0.3s ease',
                 height: '35px',
                 boxSizing: 'border-box',
-                display: 'block' // Ensure it's block for width: 100% to work in flex column
+                display: 'block'
             }
         });
 
@@ -678,8 +874,31 @@
         });
         goToNodeContainer.appendChild(currentNodeDisplay);
 
-        createJokesButtonAndMenu(); // Call function to create Jokes button and menu
-        document.body.appendChild(goToNodeContainer); // Append container to body here, after jokes menu is created
+        createJokesButtonAndMenu();
+        document.body.appendChild(goToNodeContainer);
+    }
+
+
+    /**
+     * Handles user join messages to update the character list.
+     * @param {object} user - The user data from the userJoin message.
+     */
+    function handleUserJoin(user) {
+        if (user && user.id && user.id !== myInitiatorId) {
+            ScriptState.locationUsers[user.id] = user;
+            rerenderCharacterListPopup(); // Update the popup list
+        }
+    }
+
+    /**
+     * Handles user left messages to update the character list.
+     * @param {string} userId - The ID of the user who left.
+     */
+    function handleUserLeft(userId) {
+        if (ScriptState.locationUsers[userId]) {
+            delete ScriptState.locationUsers[userId];
+            rerenderCharacterListPopup(); // Update the popup list
+        }
     }
 
 
@@ -696,8 +915,8 @@
             return;
         }
 
-        const targetNode = nodeInput.value.trim();
-        if (!targetNode) {
+        const nodeTarget = nodeInput.value.trim();
+        if (!nodeTarget) {
             addToOverlayHistory(Config.WARNING_NODE_INPUT_EMPTY);
             console.warn(Config.WARNING_NODE_INPUT_EMPTY);
             return;
@@ -706,10 +925,10 @@
         const roomChangeMessage = {
             "reason": "roomChange",
             "initiator": myInitiatorId,
-            "node": targetNode
+            "node": nodeTarget
         };
         currentWs.send(JSON.stringify(roomChangeMessage));
-        addToOverlayHistory(`${Config.GO_TO_NODE_MESSAGE_PREFIX} ${targetNode}`); // Log "Astral" navigation
+        addToOverlayHistory(`${Config.GO_TO_NODE_MESSAGE_PREFIX} ${nodeTarget}`);
         goToNodeButton.textContent = Config.GO_BACK_BUTTON_TEXT;
         goToNodeButton.title = Config.GO_TO_NODE_BUTTON_TOOLTIP_BACK;
         ScriptState.goToNodeButtonMode = 'back';
@@ -842,6 +1061,12 @@
         ws.send = function(message) {
             try {
                 const data = JSON.parse(message);
+                if (data.reason === 'userInit') {
+                    if (!originalUserInitData) { // Capture only the first userInit
+                        originalUserInitData = data;
+                        console.log('[NodeWatch WebSocket Listener]: Original userInit data captured:', originalUserInitData);
+                    }
+                }
                 if (data.reason === 'roomChange' && data.initiator === myInitiatorId && ScriptState.isTrackingNode) {
                     lastVisitedNode = data.node;
                     console.log(`[NodeWatch WebSocket Listener]: Last visited node запомнен: ${lastVisitedNode}`);
@@ -892,6 +1117,7 @@
                 const data = JSON.parse(event.data);
 
                 if (data.reason === 'userJoin' && data.user && data.user.name && data.user.id && data.user.id !== myInitiatorId) {
+                    handleUserJoin(data.user); // Call handleUserJoin to update list
                     const userName = data.user.name;
                     const userId = data.user.id;
                     userMap[userId] = userName;
@@ -899,6 +1125,7 @@
                     addToOverlayHistory(`${Config.USER_JOIN_MESSAGE_PREFIX} ${userName}`);
 
                 } else if (data.reason === 'userLeft' && data.initiator && data.initiator !== myInitiatorId) {
+                    handleUserLeft(data.initiator); // Call handleUserLeft to update list
                     const userIdLeft = data.initiator;
                     const userNameLeft = userMap[userIdLeft];
                     console.log('[NodeWatch WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
@@ -906,40 +1133,48 @@
                     const overlayMessage = userNameLeft ? `${Config.USER_LEFT_MESSAGE_PREFIX} ${userNameLeft}` : `${Config.USER_LEFT_MESSAGE_PREFIX} ID: ${userIdLeft}`;
                     addToOverlayHistory(overlayMessage);
                     delete userMap[userIdLeft];
+                    delete ScriptState.locationUsers[userIdLeft]; // Remove from location users as well
 
                 } else if (data.reason === 'nodeUsers') {
-                    console.log('[NodeWatch WebSocket Listener - Обнаружено nodeUsers сообщение. Обновление userMap из nodeUsers.');
+                    console.log('[NodeWatch WebSocket Listener - Обнаружено nodeUsers сообщение. Обновление userMap и locationUsers.');
+
+                    // Clear current location users data before updating from nodeUsers
+                    ScriptState.locationUsers = {};
+
                     data.users.forEach(user => {
                         if (user.id && user.name && user.id !== myInitiatorId) {
                             userMap[user.id] = user.name;
-                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap.`);
+                            ScriptState.locationUsers[user.id] = user; // Store full user profile
+                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.`);
                         }
                     });
-                    if (isRPTestRunning) { // Обработка nodeUsers для "Найти РП (тест)" - NEW
-                        if (expectedResponsesCount > 0) { // Check if we are still expecting responses
-                            if (data.users && data.users.length > 0 && data.users[0].node) { // Check for users and node data
-                                const nodeName = data.users[0].node; // Get node name from first user
+                    rerenderCharacterListPopup(); // Update the popup list after nodeUsers
 
-                                if (!rpTestResults[nodeName]) { // Check if we already processed response for this node
-                                    rpTestResults[nodeName] = data.users; // Store results
-                                    expectedResponsesCount--; // Decrement counter
+                    if (isRPTestRunning) {
+                        if (expectedResponsesCount > 0) {
+                            if (data.users && data.users.length > 0 && data.users[0].node) {
+                                const nodeName = data.users[0].node;
+
+                                if (!rpTestResults[nodeName]) {
+                                    rpTestResults[nodeName] = data.users;
+                                    expectedResponsesCount--;
 
                                     console.log(`[NodeWatch - RP Test]: Received nodeUsers for node: ${nodeName}, remaining responses: ${expectedResponsesCount}`);
 
-                                    if (expectedResponsesCount === 0) { // All responses received?
+                                    if (expectedResponsesCount === 0) {
                                         console.log("[NodeWatch - RP Test]: All nodeUsers responses received. Starting analysis.");
-                                        isRPTestRunning = false; // End RP Test mode
-                                        addToOverlayHistory("Поиск РП завершен."); // Overlay message
-                                        analyzeRPTestResults(); // Analyze and display results
+                                        isRPTestRunning = false;
+                                        addToOverlayHistory("Поиск РП завершен.");
+                                        analyzeRPTestResults();
                                     }
                                 } else {
                                     console.warn(`[NodeWatch - RP Test]: Duplicate nodeUsers response received for node: ${nodeName}. Ignoring.`);
                                 }
                             } else {
                                 console.warn("[NodeWatch - RP Test]: Invalid nodeUsers response format or no users in response to determine node.", event.data);
-                                expectedResponsesCount--; // Decrement even on error to prevent hang
-                                if (expectedResponsesCount < 0) expectedResponsesCount = 0; // Safety for counter errors
-                                if (expectedResponsesCount === 0) { // Check for completion after error handling
+                                expectedResponsesCount--;
+                                if (expectedResponsesCount < 0) expectedResponsesCount = 0;
+                                if (expectedResponsesCount === 0) {
                                     isRPTestRunning = false;
                                     addToOverlayHistory("Поиск РП завершен.");
                                     analyzeRPTestResults();
@@ -960,7 +1195,7 @@
             clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
-            isRPTestRunning = false; // Ensure RP Test flag is reset on close - NEW
+            isRPTestRunning = false;
             goToNodeContainer.style.display = 'none';
         });
 
@@ -970,7 +1205,7 @@
             clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
-            isRPTestRunning = false; // Ensure RP Test flag is reset on error - NEW
+            isRPTestRunning = false;
             goToNodeContainer.style.display = 'none';
         });
 
@@ -991,7 +1226,7 @@
 
 
     console.log('[NodeWatch WebSocket Listener]: Скрипт активен и перехватывает WebSocket на fukuro.su');
-    createOverlay(); // <--  Убедитесь, что эта строка есть и не закомментирована!
+    createOverlay();
     createAnalyzeButton();
     createGoToNodeButton();
 })();
