@@ -5,7 +5,7 @@
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, current location for character switch, and fixes for edge cases.
 // @author       Shadowkyst
-// @match        https://www.fukuro.su/
+// @match        https://fukuro.su/
 // @grant        none
 // ==/UserScript==
 
