@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      4.3.7
+// @version      4.5.0
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
-// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, current location for character switch, and fixes for edge cases.
+// @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, current location for character switch, and fixes for edge cases. + Mute Panel Development
 // @author       Shadowkyst
 // @match        https://www.fukuro.su/
 // @grant        none
@@ -58,7 +58,16 @@
         COPYING_CHARACTER_OVERLAY_MESSAGE: "[Joke]: Копирую персонажа...", // Overlay message when copying character
         CHARACTER_COPY_SUCCESSFUL_OVERLAY: "[Joke]: Персонаж скопирован!", // Overlay message for successful copy
         RETURN_ORIGINAL_CHARACTER_BUTTON_TEXT: "Вернуть себя", // New constant
-        RETURN_ORIGINAL_CHARACTER_BUTTON_TOOLTIP: "Вернуть свой изначальный персонаж" // New constant
+        RETURN_ORIGINAL_CHARACTER_BUTTON_TOOLTIP: "Вернуть свой изначальный персонаж", // New constant
+        WEBSOCKET_INPUT_PLACEHOLDER: "Введите JSON для отправки", // Placeholder для textarea
+        WEBSOCKET_SEND_BUTTON_TEXT: "Отправить WS", // Текст кнопки отправки
+        WEBSOCKET_SEND_BUTTON_TOOLTIP: "Отправить JSON сообщение через WebSocket", // Подсказка для кнопки
+        MUTE_BUTTON_TEXT: "Муты", // Кнопка открытия панели мутов
+        MUTE_BUTTON_TOOLTIP: "Открыть панель управления мутами", // Подсказка для кнопки мутов
+        MUTE_PANEL_TITLE: "Панель управления мутами:", // Заголовок панели мутов
+        MUTE_USER_BUTTON_TEXT: "Мут", // Текст кнопки "Мут" в списке пользователей
+        MUTED_USERS_TAB_TEXT: "Замученные", // Текст вкладки "Замученные"
+        LOCATION_USERS_TAB_TEXT: "На локации" // Текст вкладки "На локации"
     };
 
     /**
@@ -99,11 +108,12 @@
         isTrackingNode: true,
         originalNode: null,
         goToNodeButtonMode: 'astral' ,// 'astral' или 'back'
-        locationUsers: {} // Store users in the current location and their profiles
+        locationUsers: {}, // Store users in the current location and their profiles
+        mutedUserIds: [] // Список ID замученных пользователей
     };
 
     const originalWebSocket = window.WebSocket;
-    const userMap = {};
+    let userMap = {};
     let overlayDiv = null;
     const overlayHistory = [];
     let myInitiatorId = null;
@@ -137,6 +147,8 @@
     let lastVisitedNode = null;
     let nodeBeforeRPTest = null;
     let characterListPopup = null; // Popup for character list
+    let muteListPopup = null; // Popup for mute list
+    let muteListPopupContent = null;
 
 
     // New Node Navigation Variables
@@ -155,6 +167,7 @@
     let expectedResponsesCount = 0;
     let isRPTestRunning = false;
     let jokeButtonCopyCharacter = null; // "Скопировать" button
+    let muteButton = null; // Кнопка "Муты"
 
 
     /**
@@ -347,7 +360,7 @@
      * @private
      */
     function _appendCloseIconToPopup(popupElement, closeIconElement) {
-        closeIconElement.onclick = closeAnalysisPopup;
+        closeIconElement.onclick = closeAnyPopup; // Используем общую функцию закрытия
         popupElement.appendChild(closeIconElement);
     }
 
@@ -358,7 +371,7 @@
      */
     function createAnalysisPopup(contentHTML) {
         if (analysisPopup) {
-            closeAnalysisPopup();
+            closeAnyPopup(); // Закрываем любой открытый попап перед открытием нового
         }
 
         analysisPopup = _createPopupElement(contentHTML);
@@ -366,16 +379,222 @@
         _appendCloseIconToPopup(analysisPopup, closeIcon);
 
         document.body.appendChild(analysisPopup);
+        _setupPopupDrag(analysisPopup); // Настройка драг&дроп для попапа
+    }
 
-        // --- Drag and drop logic with boundaries ---
+    /**
+     * Creates and displays the mute list popup.
+     */
+    function openMuteListPopup() {
+        if (muteListPopup) {
+            closeAnyPopup();
+            return;
+        }
+
+        let muteListHTML = `<h2>${Config.MUTE_PANEL_TITLE}</h2>`;
+        muteListHTML += `<div id="mute-list-tabs">
+                            <button id="location-users-tab" class="mute-tab active">${Config.LOCATION_USERS_TAB_TEXT}</button>
+                            <button id="muted-users-tab" class="mute-tab">${Config.MUTED_USERS_TAB_TEXT}</button>
+                         </div>`;
+        muteListHTML += `<div id="mute-list-content-container" style="max-height: 300px; overflow-y: auto;">
+                            <div id="location-users-content">`;
+        muteListHTML += generateLocationUsersListHTML(); // Generate initial content for location users
+        muteListHTML += `</div>
+                            <div id="muted-users-content" style="display: none;">`;
+        muteListHTML += generateMutedUsersListHTML(); // Generate initial content for muted users
+        muteListHTML += `</div>
+                         </div>`;
+
+
+        muteListPopup = _createPopupElement(muteListHTML);
+        muteListPopupContent = muteListPopup.querySelector('#mute-list-content-container'); // Store content element
+        const closeIcon = _createCloseIcon();
+        _appendCloseIconToPopup(muteListPopup, closeIcon);
+        document.body.appendChild(muteListPopup);
+        _setupPopupDrag(muteListPopup); // Настройка драг&дроп для попапа
+
+        // Setup tab switching logic
+        const locationUsersTab = muteListPopup.querySelector('#location-users-tab');
+        const mutedUsersTab = muteListPopup.querySelector('#muted-users-tab');
+        const locationUsersContent = muteListPopup.querySelector('#location-users-content');
+        const mutedUsersContent = muteListPopup.querySelector('#muted-users-content');
+
+        locationUsersTab.addEventListener('click', () => {
+            locationUsersContent.style.display = 'block';
+            mutedUsersContent.style.display = 'none';
+            locationUsersTab.classList.add('active');
+            mutedUsersTab.classList.remove('active');
+        });
+
+        mutedUsersTab.addEventListener('click', () => {
+            locationUsersContent.style.display = 'none';
+            mutedUsersContent.style.display = 'block';
+            mutedUsersTab.classList.add('active');
+            locationUsersTab.classList.remove('active');
+        });
+
+        rerenderMuteListPopup(); // Ensure content is up-to-date on open
+    }
+
+
+    /**
+     * Gets the user ID (UUID) associated with a local_id.
+     * @param {string} localId - The local_id of the user.
+     * @returns {string|null} The user ID or null if not found.
+     */
+    function getUserIdByLocalId(localId) {
+        for (const userId in ScriptState.locationUsers) {
+            if (ScriptState.locationUsers[userId].local_id === localId) {
+                return userId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Generates HTML for the list of users currently in the location for the mute panel.
+     * @returns {string} HTML string for the location users list.
+     */
+    function generateLocationUsersListHTML() {
+        let usersListHTML = "";
+        const usersInLocation = Object.values(ScriptState.locationUsers);
+        if (usersInLocation.length === 0) {
+            usersListHTML += "<p>Нет других персонажей на локации.</p>";
+        } else {
+            usersInLocation.forEach(userProfile => {
+                if (userProfile.id !== myInitiatorId) { // Exclude current user from the list
+                    const isMuted = ScriptState.mutedUserIds.includes(userProfile.id); // Still using id for mute list
+                    const muteButtonText = isMuted ? "Замучен" : Config.MUTE_USER_BUTTON_TEXT;
+                    const userNameDisplay = isMuted ? `<b>${userProfile.name}</b> <span style="color: orange;">(Замучен)</span>` : `<b>${userProfile.name}</b>`;
+
+                    usersListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555; display: flex; justify-content: space-between; align-items: center;">
+                                        <div>
+                                            <p style="margin: 0;">${userNameDisplay} (ID: ${userProfile.id}, Local ID: ${userProfile.local_id})</p>
+                                        </div>
+                                        <div>
+                                            <button class="mute-user-button" style="padding: 5px 10px; cursor: pointer;"
+                                                    data-user-id="${userProfile.id}"
+                                                    ${isMuted ? 'disabled' : ''}>${muteButtonText}</button>
+                                        </div>
+                                     </div>`;
+                }
+            });
+        }
+        return usersListHTML;
+    }
+
+    /**
+     * Generates HTML for the list of muted users for the mute panel.
+     * @returns {string} HTML string for the muted users list.
+     */
+    function generateMutedUsersListHTML() {
+        let mutedUsersListHTML = "";
+        if (ScriptState.mutedUserIds.length === 0) {
+            mutedUsersListHTML += "<p>Список замученных пользователей пуст.</p>";
+        } else {
+            ScriptState.mutedUserIds.forEach(userId => {
+                const userProfile = ScriptState.locationUsers[userId]; // Get profile by id
+                const userName = userProfile ? userProfile.name : userMap[userId] || `ID: ${userId}`; // Fallback to name from userMap or just ID
+                const localId = userProfile ? userProfile.local_id : "N/A";
+
+                mutedUsersListHTML += `<div style="margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #555; display: flex; justify-content: space-between; align-items: center;">
+                                         <div>
+                                             <p style="margin: 0;"><b>${userName}</b> (ID: ${userId}, Local ID: ${localId}) - <span style="color: orange;">Замучен</span></p>
+                                         </div>
+                                         <div>
+                                             <button class="unmute-user-button" style="padding: 5px 10px; cursor: pointer;"
+                                                     data-user-id="${userId}">Снять мут</button>
+                                         </div>
+                                      </div>`;
+            });
+        }
+        return mutedUsersListHTML;
+    }
+
+    /**
+     * Re-renders the mute list popup content to update user lists.
+     */
+    function rerenderMuteListPopup() {
+        if (!muteListPopup || !muteListPopupContent) return;
+
+        const locationUsersContentDiv = muteListPopupContent.querySelector('#location-users-content');
+        const mutedUsersContentDiv = muteListPopupContent.querySelector('#muted-users-content');
+
+        if (locationUsersContentDiv) {
+            locationUsersContentDiv.innerHTML = generateLocationUsersListHTML();
+        }
+        if (mutedUsersContentDiv) {
+            mutedUsersContentDiv.innerHTML = generateMutedUsersListHTML();
+        }
+
+        // Re-bind event listeners for new "Mute User" buttons in location users tab
+        const muteButtons = muteListPopupContent.querySelectorAll('.mute-user-button');
+        muteButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const userId = this.getAttribute('data-user-id');
+                muteUser(userId);
+            });
+        });
+
+        // Re-bind event listeners for new "Unmute User" buttons in muted users tab
+        const unmuteButtons = muteListPopupContent.querySelectorAll('.unmute-user-button');
+        unmuteButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const userId = this.getAttribute('data-user-id');
+                unmuteUser(userId);
+            });
+        });
+    }
+
+
+    /**
+     * Mutes a user by adding their ID to the mutedUserIds list and updates the popup.
+     * @param {string} userId - The ID of the user to mute.
+     */
+    function muteUser(userId) {
+        if (!ScriptState.mutedUserIds.includes(userId)) {
+            ScriptState.mutedUserIds.push(userId);
+            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} muted.`);
+            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} замучен.`);
+        } else {
+            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} is already muted.`);
+            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} уже замучен.`);
+        }
+        rerenderMuteListPopup();
+    }
+
+
+    /**
+     * Unmutes a user by removing their ID from the mutedUserIds list and updates the popup.
+     * @param {string} userId - The ID of the user to unmute.
+     */
+    function unmuteUser(userId) {
+        if (ScriptState.mutedUserIds.includes(userId)) {
+            ScriptState.mutedUserIds = ScriptState.mutedUserIds.filter(id => id !== userId);
+            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} unmuted.`);
+            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} размучен.`);
+        } else {
+            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} is not muted.`);
+            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} не замучен.`);
+        }
+        rerenderMuteListPopup();
+    }
+
+
+    /**
+     * Sets up drag and drop functionality for a given popup element.
+     * @param {HTMLDivElement} popupElement - The popup element to make draggable.
+     * @private
+     */
+    function _setupPopupDrag(popupElement) {
         let isDragging = false;
         let offsetX, offsetY;
 
-        analysisPopup.addEventListener('mousedown', (e) => {
+        popupElement.addEventListener('mousedown', (e) => {
             isDragging = true;
-            offsetX = e.clientX - analysisPopup.offsetLeft;
-            offsetY = e.clientY - analysisPopup.offsetTop;
-            analysisPopup.style.cursor = 'grabbing';
+            offsetX = e.clientX - popupElement.offsetLeft;
+            offsetY = e.clientY - popupElement.offsetTop;
+            popupElement.style.cursor = 'grabbing';
             document.body.style.userSelect = 'none';
         });
 
@@ -385,32 +604,26 @@
             let newLeft = e.clientX - offsetX;
             let newTop = e.clientY - offsetY;
 
-            // Boundary checks
-            if (newLeft < 0) {
-                newLeft = 0;
-            }
-            if (newTop < 0) {
-                newTop = 0;
-            }
-            if (newLeft > window.innerWidth - analysisPopup.offsetWidth) {
-                newLeft = window.innerWidth - analysisPopup.offsetWidth;
-            }
-            if (newTop > window.innerHeight - analysisPopup.offsetHeight) {
-                newTop = window.innerHeight - analysisPopup.offsetHeight;
-            }
+            // Boundary checks (optional, can be added if needed)
+            if (newLeft < 0) newLeft = 0;
+            if (newTop < 0) newTop = 0;
+            if (newLeft > window.innerWidth - popupElement.offsetWidth) newLeft = window.innerWidth - popupElement.offsetWidth;
+            if (newTop > window.innerHeight - popupElement.offsetHeight) newTop = window.innerHeight - popupElement.offsetHeight;
 
-            analysisPopup.style.left = newLeft + 'px';
-            analysisPopup.style.top = newTop + 'px';
+
+            popupElement.style.left = newLeft + 'px';
+            popupElement.style.top = newTop + 'px';
         });
 
         document.addEventListener('mouseup', () => {
             isDragging = false;
-            analysisPopup.style.cursor = 'grab';
+            popupElement.style.cursor = 'grab';
             document.body.style.userSelect = 'auto';
         });
 
-        analysisPopup.style.cursor = 'grab';
+        popupElement.style.cursor = 'grab';
     }
+
 
     /**
      * Closes the analysis results popup.
@@ -419,11 +632,94 @@
         if (analysisPopup) {
             document.body.removeChild(analysisPopup);
             analysisPopup = null;
-        } else if (characterListPopup) {
-            document.body.removeChild(characterListPopup);
-            characterListPopup = null;
         }
     }
+
+    /**
+     * Closes the mute list popup.
+     */
+    function closeMuteListPopup() {
+        if (muteListPopup) {
+            document.body.removeChild(muteListPopup);
+            muteListPopup = null;
+            muteListPopupContent = null;
+        }
+    }
+
+    /**
+     * Общая функция для закрытия любого попапа (анализа или мутов).
+     */
+    function closeAnyPopup() {
+        closeAnalysisPopup();
+        closeMuteListPopup();
+        closeCharacterListPopup(); // Добавлено закрытие попапа списка персонажей
+    }
+
+
+    /**
+ * Создает элементы UI для отправки произвольных WebSocket сообщений.
+ */
+function createWebsocketSender() {
+    const websocketInput = Utils.createElement('textarea', {
+        attributes: {
+            id: 'websocket-input',
+            placeholder: Config.WEBSOCKET_INPUT_PLACEHOLDER
+        },
+        styles: {
+            width: '100%',
+            padding: '8px',
+            borderRadius: '5px',
+            border: '1px solid #777',
+            backgroundColor: 'rgba(30, 30, 30, 0.7)',
+            color: '#eee',
+            fontFamily: 'monospace', // Моноширинный шрифт для JSON
+            fontSize: '14px',
+            marginBottom: '5px',
+            boxSizing: 'border-box',
+            resize: 'vertical', // Разрешить вертикальное изменение размера
+            minHeight: '50px' // Минимальная высота textarea
+        }
+    });
+    jokesMenuContainer.appendChild(websocketInput);
+
+    const sendButton = Utils.createElement('button', {
+        attributes: { title: Config.WEBSOCKET_SEND_BUTTON_TOOLTIP },
+        textContent: Config.WEBSOCKET_SEND_BUTTON_TEXT,
+        styles: {
+            width: '100%',
+            padding: '8px 15px',
+            borderRadius: '5px',
+            border: '1px solid #777',
+            backgroundColor: 'rgba(50, 50, 50, 0.6)',
+            color: '#eee',
+            cursor: 'pointer',
+            fontFamily: 'serif',
+            fontSize: '15px',
+            boxSizing: 'border-box'
+        }
+    });
+    sendButton.addEventListener('click', () => {
+        const message = websocketInput.value.trim();
+        if (message) {
+            try {
+                JSON.parse(message); // Проверка, что это валидный JSON (необязательно, но полезно)
+
+                currentWs.send(message);
+                addToOverlayHistory(`[WS Отправка]: ${message}`);
+                console.log('[NodeWatch - WS Отправка]: Отправлено сообщение:', message);
+                websocketInput.value = ''; // Очистить поле ввода после отправки
+
+            } catch (e) {
+                addToOverlayHistory("[WS Ошибка]: Невалидный JSON.");
+                console.error("[NodeWatch - WS Ошибка]: Введенный текст не является валидным JSON:", e);
+            }
+        } else {
+            addToOverlayHistory("[WS Предупреждение]: Введите JSON сообщение.");
+            console.warn("[NodeWatch - WS Предупреждение]: Попытка отправить пустое WebSocket сообщение.");
+        }
+    });
+    jokesMenuContainer.appendChild(sendButton);
+}
 
     /**
      * Handles the "Light" joke button click - now a toggle.
@@ -477,8 +773,8 @@
                 currentWs.send(lightOnMessage);
                 console.log("[NodeWatch - Joke]: Sending light on request");
                 addToOverlayHistory("[Joke]: Включаю свет...");
-            }, 1000); // Small delay for effect
-        }, 3000); // Repeat every 3 seconds
+            }, 500); // Small delay for effect
+        }, 1000); // Repeat every 3 seconds
     }
 
     /**
@@ -503,7 +799,8 @@
      */
     function openCharacterListPopup() {
         if (characterListPopup) {
-            closeCharacterListPopup();
+            closeAnyPopup();
+            return;
         }
 
         let characterListHTML = `<h2>${Config.CHARACTERS_MENU_TITLE}</h2><div id="character-list-content" style="max-height: 300px; overflow-y: auto; margin-bottom: 10px;">`; // Added margin-bottom for button spacing and content id
@@ -532,6 +829,7 @@
         const closeIcon = _createCloseIcon();
         _appendCloseIconToPopup(characterListPopup, closeIcon);
         document.body.appendChild(characterListPopup);
+        _setupPopupDrag(characterListPopup); // Настройка драг&дроп для попапа
 
         // Add event listeners after popup is in DOM
         const copyButtons = characterListPopup.querySelectorAll('.copy-char-button');
@@ -593,9 +891,6 @@
             document.body.removeChild(characterListPopup);
             characterListPopup = null;
             characterListPopupContent = null; // Clear content reference
-        } else if (analysisPopup) {
-            document.body.removeChild(analysisPopup);
-            analysisPopup = null;
         }
     }
 
@@ -836,6 +1131,29 @@
         jokeButtonCopyCharacter.addEventListener('click', copyCharacterJoke);
         jokesMenuContainer.appendChild(jokeButtonCopyCharacter);
 
+        // "Mute Panel" Button
+        muteButton = Utils.createElement('button', {
+            attributes: { title: Config.MUTE_BUTTON_TOOLTIP },
+            textContent: Config.MUTE_BUTTON_TEXT,
+            styles: {
+                width: '100%',
+                padding: '8px 15px',
+                borderRadius: '5px',
+                border: '1px solid #777',
+                backgroundColor: 'rgba(50, 50, 50, 0.6)',
+                color: '#eee',
+                cursor: 'pointer',
+                fontFamily: 'serif',
+                fontSize: '15px',
+                boxSizing: 'border-box',
+                marginBottom: '5px'
+            }
+        });
+        muteButton.addEventListener('click', openMuteListPopup);
+        jokesMenuContainer.appendChild(muteButton);
+
+
+        createWebsocketSender();
 
         goToNodeContainer.appendChild(jokesButton);
         goToNodeContainer.appendChild(jokesMenuContainer);
@@ -939,25 +1257,47 @@
 
 
     /**
-     * Handles user join messages to update the character list.
+     * Handles user join messages to update the character list and mute panel.
      * @param {object} user - The user data from the userJoin message.
      */
     function handleUserJoin(user) {
         if (user && user.id && user.id !== myInitiatorId) {
+            user.local_id = user.local_id || "N/A"; // Ensure local_id is stored, default to "N/A" if missing
             ScriptState.locationUsers[user.id] = user;
-            rerenderCharacterListPopup(); // Update the popup list
+            rerenderCharacterListPopup();
+            rerenderMuteListPopup();
         }
     }
 
     /**
-     * Handles user left messages to update the character list.
+     * Handles user left messages to update the character list and mute panel.
      * @param {string} userId - The ID of the user who left.
      */
     function handleUserLeft(userId) {
         if (ScriptState.locationUsers[userId]) {
             delete ScriptState.locationUsers[userId];
-            rerenderCharacterListPopup(); // Update the popup list
+            rerenderCharacterListPopup(); // Update the character list popup
+            rerenderMuteListPopup(); // Update the mute list popup
         }
+    }
+
+    /**
+     * Handles nodeUsers messages to update user information, including local_id.
+     */
+    function handleNodeUsers(usersData) {
+        ScriptState.locationUsers = {}; // Clear current location users data
+        userMap = {}; // Clear userMap as well, to refresh names based on nodeUsers
+
+        usersData.forEach(user => {
+            if (user.id && user.name && user.id !== myInitiatorId) {
+                user.local_id = user.local_id || "N/A"; // Ensure local_id is stored, default to "N/A" if missing
+                userMap[user.id] = user.name;
+                ScriptState.locationUsers[user.id] = user; // Store full user profile including local_id
+                console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}, Local ID: ${user.local_id}) добавлен в userMap и locationUsers.`);
+            }
+        });
+        rerenderCharacterListPopup(); // Update character list popup
+        rerenderMuteListPopup();    // Update mute list popup
     }
 
 
@@ -1175,8 +1515,24 @@
             try {
                 const data = JSON.parse(event.data);
 
-                if (data.reason === 'userJoin' && data.user && data.user.name && data.user.id && data.user.id !== myInitiatorId) {
-                    handleUserJoin(data.user); // Call handleUserJoin to update list
+                if (data.reason === 'chat') {
+                    const chatLocalId = data.local_id;
+                    const chatSenderId = getUserIdByLocalId(chatLocalId);
+
+                    if (chatSenderId && ScriptState.mutedUserIds.includes(chatSenderId)) {
+                        console.log(`[NodeWatch - Mute Panel]: Blocked message from muted user with local_id: ${chatLocalId}, user_id: ${chatSenderId}`);
+                        // --- CHANGE: Modify event.data to prevent chat message processing ---
+                        event.stopImmediatePropagation(); // Stop further message processing
+                        event.preventDefault();
+                        Object.defineProperty(event, 'data', {
+                            writable: true,
+                            value: JSON.stringify({"reason": "pong"}) // Replace with pong or empty message
+                        });
+                        // --- END CHANGE ---
+                        return;
+                    }
+                    } else if (data.reason === 'userJoin' && data.user && data.user.name && data.user.id && data.user.id !== myInitiatorId) {
+                    handleUserJoin(data.user); // Call handleUserJoin to update lists
                     const userName = data.user.name;
                     const userId = data.user.id;
                     userMap[userId] = userName;
@@ -1184,7 +1540,7 @@
                     addToOverlayHistory(`${Config.USER_JOIN_MESSAGE_PREFIX} ${userName}`);
 
                 } else if (data.reason === 'userLeft' && data.initiator && data.initiator !== myInitiatorId) {
-                    handleUserLeft(data.initiator); // Call handleUserLeft to update list
+                    handleUserLeft(data.initiator); // Call handleUserLeft to update lists
                     const userIdLeft = data.initiator;
                     const userNameLeft = userMap[userIdLeft];
                     console.log('[NodeWatch WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
@@ -1195,6 +1551,7 @@
                     delete ScriptState.locationUsers[userIdLeft]; // Remove from location users as well
 
                 } else if (data.reason === 'nodeUsers') {
+                    handleNodeUsers(data.users);
                     console.log('[NodeWatch WebSocket Listener - Обнаружено nodeUsers сообщение. Обновление userMap и locationUsers.');
 
                     // Clear current location users data before updating from nodeUsers
@@ -1204,10 +1561,11 @@
                         if (user.id && user.name && user.id !== myInitiatorId) {
                             userMap[user.id] = user.name;
                             ScriptState.locationUsers[user.id] = user; // Store full user profile
-                            console.log('[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.');
+                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.`);
                         }
                     });
-                    rerenderCharacterListPopup(); // Update the popup list after nodeUsers
+                    rerenderCharacterListPopup(); // Update character list popup
+                    rerenderMuteListPopup(); // Update mute list popup
 
                     if (isRPTestRunning) {
                         if (expectedResponsesCount > 0) {
@@ -1271,7 +1629,7 @@
         return ws;
     };
 
-    // CSS для мигающей кнопки
+    // CSS для мигающей кнопки и вкладок
     const style = Utils.createElement('style');
     style.textContent = `
         .blinking-button {
@@ -1279,6 +1637,34 @@
         }
         @keyframes blinker {
             50% { opacity: 0.5; }
+        }
+        /* Стили для вкладок в попапе мутов */
+        #mute-list-tabs {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        .mute-tab {
+            padding: 8px 15px;
+            border: 1px solid #777;
+            border-radius: 5px 5px 0 0;
+            background-color: rgba(50, 50, 50, 0.6);
+            color: #eee;
+            cursor: pointer;
+            font-family: serif;
+            font-size: 15px;
+            box-sizing: border-box;
+        }
+        .mute-tab.active {
+            background-color: rgba(70, 70, 70, 0.7);
+        }
+        .mute-tab:not(.active) {
+            border-bottom: none; /* Убираем нижнюю границу для неактивной вкладки */
+        }
+        #mute-list-content-container {
+            border: 1px solid #777;
+            border-radius: 0 5px 5px 5px;
+            padding: 10px;
+            background-color: rgba(30, 30, 30, 0.7);
         }
     `;
     document.head.appendChild(style);
