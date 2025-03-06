@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         NodeWatch
 // @namespace    http://tampermonkey.net/
-// @version      4.5.0
+// @version      4.5.2
 // @icon         https://github.com/Shadowkyst/NodeWatch-Fukuro-userscript/raw/master/assets/favicon.webp
 // @description  WebSocket listener for fukuro.su, displaying user join/leave events and location analysis results in an overlay and popup. Sorts users in analysis by state (playing/watching). Fix for initial overlay text visibility. Added character copy and return original character feature, with state and move updates, dynamic character list updates, current location for character switch, and fixes for edge cases. + Mute Panel Development
 // @author       Shadowkyst
+// @match        https://www.fukuro.su/
 // @match        https://fukuro.su/
 // @grant        none
 // ==/UserScript==
@@ -67,7 +68,15 @@
         MUTE_PANEL_TITLE: "Панель управления мутами:", // Заголовок панели мутов
         MUTE_USER_BUTTON_TEXT: "Мут", // Текст кнопки "Мут" в списке пользователей
         MUTED_USERS_TAB_TEXT: "Замученные", // Текст вкладки "Замученные"
-        LOCATION_USERS_TAB_TEXT: "На локации" // Текст вкладки "На локации"
+        LOCATION_USERS_TAB_TEXT: "На локации", // Текст вкладки "На локации"
+        LOG_PREFIX_WEBSOCKET: "[NodeWatch - WebSocket]: ",
+        LOG_PREFIX_USER_EVENTS: "[NodeWatch - User Events]: ",
+        LOG_PREFIX_RP_ANALYSIS: "[NodeWatch - RP Analysis]: ",
+        LOG_PREFIX_NAVIGATION: "[NodeWatch - Navigation]: ",
+        LOG_PREFIX_JOKES: "[NodeWatch - Jokes]: ",
+        LOG_PREFIX_MUTE_PANEL: "[NodeWatch - Mute Panel]: ",
+        LOG_PREFIX_WS_SENDER: "[NodeWatch - WS Sender]: ",
+        LOG_PREFIX_GENERAL: "[NodeWatch - General]: ",
     };
 
     /**
@@ -554,28 +563,28 @@
     function muteUser(userId) {
         if (!ScriptState.mutedUserIds.includes(userId)) {
             ScriptState.mutedUserIds.push(userId);
-            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} muted.`);
-            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} замучен.`);
+            console.log(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} замучен.`);
+            addToOverlayHistory(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} замучен.`);
         } else {
-            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} is already muted.`);
-            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} уже замучен.`);
+            console.log(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} уже замучен.`);
+            addToOverlayHistory(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} уже замучен.`);
         }
         rerenderMuteListPopup();
     }
 
 
-    /**
+        /**
      * Unmutes a user by removing their ID from the mutedUserIds list and updates the popup.
      * @param {string} userId - The ID of the user to unmute.
      */
     function unmuteUser(userId) {
         if (ScriptState.mutedUserIds.includes(userId)) {
             ScriptState.mutedUserIds = ScriptState.mutedUserIds.filter(id => id !== userId);
-            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} unmuted.`);
-            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} размучен.`);
+            console.log(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} размучен.`);
+            addToOverlayHistory(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} размучен.`);
         } else {
-            console.log(`[NodeWatch - Mute Panel]: User ID ${userId} is not muted.`);
-            addToOverlayHistory(`[Mute Panel]: Пользователь ID ${userId} не замучен.`);
+            console.log(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} не замучен.`);
+            addToOverlayHistory(Config.LOG_PREFIX_MUTE_PANEL + `Пользователь ID ${userId} не замучен.`);
         }
         rerenderMuteListPopup();
     }
@@ -705,17 +714,17 @@ function createWebsocketSender() {
                 JSON.parse(message); // Проверка, что это валидный JSON (необязательно, но полезно)
 
                 currentWs.send(message);
-                addToOverlayHistory(`[WS Отправка]: ${message}`);
-                console.log('[NodeWatch - WS Отправка]: Отправлено сообщение:', message);
+                addToOverlayHistory(Config.LOG_PREFIX_WS_SENDER + `Отправлено сообщение: ${message}`);
+                console.log(Config.LOG_PREFIX_WS_SENDER + 'Отправлено сообщение:', message);
                 websocketInput.value = ''; // Очистить поле ввода после отправки
 
             } catch (e) {
-                addToOverlayHistory("[WS Ошибка]: Невалидный JSON.");
-                console.error("[NodeWatch - WS Ошибка]: Введенный текст не является валидным JSON:", e);
+                addToOverlayHistory(Config.LOG_PREFIX_WS_SENDER + "Невалидный JSON.");
+                console.error(Config.LOG_PREFIX_WS_SENDER + "Введенный текст не является валидным JSON:", e);
             }
         } else {
-            addToOverlayHistory("[WS Предупреждение]: Введите JSON сообщение.");
-            console.warn("[NodeWatch - WS Предупреждение]: Попытка отправить пустое WebSocket сообщение.");
+            addToOverlayHistory(Config.LOG_PREFIX_WS_SENDER + "Введите JSON сообщение.");
+            console.warn(Config.LOG_PREFIX_WS_SENDER + "Попытка отправить пустое WebSocket сообщение.");
         }
     });
     jokesMenuContainer.appendChild(sendButton);
@@ -739,7 +748,7 @@ function createWebsocketSender() {
         }
     }
 
-    /**
+        /**
      * Starts the interval for sending light joke requests.
      */
     function startLightJokeInterval() {
@@ -748,8 +757,8 @@ function createWebsocketSender() {
         }
         lightJokeIntervalId = setInterval(() => {
             if (!myInitiatorId) {
-                console.log(Config.INITIATOR_ID_NOT_RECEIVED);
-                addToOverlayHistory(Config.INITIATOR_ID_NOT_RECEIVED);
+                console.log(Config.LOG_PREFIX_GENERAL + Config.INITIATOR_ID_NOT_RECEIVED);
+                addToOverlayHistory(Config.LOG_PREFIX_GENERAL + Config.INITIATOR_ID_NOT_RECEIVED);
                 stopLightJokeInterval(); // Stop interval if no initiator ID
                 return;
             }
@@ -766,13 +775,13 @@ function createWebsocketSender() {
             });
 
             currentWs.send(lightOffMessage);
-            console.log("[NodeWatch - Joke]: Sending light off request");
-            addToOverlayHistory("[Joke]: Выключаю свет...");
+            console.log(Config.LOG_PREFIX_JOKES + "Sending light off request");
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Выключаю свет...");
 
             setTimeout(() => {
                 currentWs.send(lightOnMessage);
-                console.log("[NodeWatch - Joke]: Sending light on request");
-                addToOverlayHistory("[Joke]: Включаю свет...");
+                console.log(Config.LOG_PREFIX_JOKES + "Sending light on request");
+                addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Включаю свет...");
             }, 500); // Small delay for effect
         }, 1000); // Repeat every 3 seconds
     }
@@ -894,15 +903,15 @@ function createWebsocketSender() {
         }
     }
 
-    /**
+        /**
      * Copies the character profile and sends a userInit message to impersonate.
      * This function needs to be globally accessible from the HTML onclick event.
      * @param {string} userId - The ID of the user to copy.
      */
     window.copyCharacterProfile = function(userId) {
         if (!lastVisitedNode) {
-            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
-            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            addToOverlayHistory(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
             return;
         }
         ScriptState.isTrackingNode = false; // Disable location tracking before relocation
@@ -911,9 +920,9 @@ function createWebsocketSender() {
         const profileToCopy = ScriptState.locationUsers[userId];
 
         if (profileToCopy) {
-            addToOverlayHistory(Config.COPYING_CHARACTER_OVERLAY_MESSAGE);
-            console.log(`[NodeWatch - Joke]: Copying character profile for user ID: ${userId}`);
-            console.log("[NodeWatch - Joke]: Profile to copy:", profileToCopy);
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + Config.COPYING_CHARACTER_OVERLAY_MESSAGE);
+            console.log(Config.LOG_PREFIX_JOKES + `Копирование профиля: ${userId}`);
+            console.log(Config.LOG_PREFIX_JOKES + "Профиль для копирования:", profileToCopy);
 
             // -- Relocation Workaround --
             const bunkerNode = "int_bunker"; // Temporary node
@@ -925,7 +934,7 @@ function createWebsocketSender() {
                 "node": bunkerNode
             };
             currentWs.send(JSON.stringify(goToBunkerMessage));
-            addToOverlayHistory(`[NodeWatch - Joke]: Перемещаюсь в ${bunkerNode} для смены персонажа...`);
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + `Перемещаюсь в ${bunkerNode} для смены персонажа...`);
             const profileToSend = { ...profileToCopy };
 
 
@@ -941,16 +950,16 @@ function createWebsocketSender() {
                 "additional": profileToSend.additional
             };
 
-            console.log("[NodeWatch - Joke]: userInitMessage:", userInitMessage);
+            console.log(Config.LOG_PREFIX_JOKES + "userInitMessage:", userInitMessage);
             currentWs.send(JSON.stringify(userInitMessage));
 
             const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
             currentWs.send(JSON.stringify(updateStateMessage));
-            console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
+            console.log(Config.LOG_PREFIX_JOKES + "Отправка updatePlayerState:", updateStateMessage);
 
             const userMoveMessage = { "reason": "userMove", "position": profileToCopy.position || "" }; // Use empty string as default if position is missing
             currentWs.send(JSON.stringify(userMoveMessage));
-            console.log("[NodeWatch - Joke]: Sending userMove message:", userMoveMessage);
+            console.log(Config.LOG_PREFIX_JOKES + "Отправка userMove:", userMoveMessage);
 
             // After userInit, move back to original location
             const returnToOriginalLocationMessage = {
@@ -959,41 +968,41 @@ function createWebsocketSender() {
                 "node": originalLocationNode
             };
             currentWs.send(JSON.stringify(returnToOriginalLocationMessage));
-            addToOverlayHistory(`[NodeWatch - Joke]: Возвращаюсь в ${originalLocationNode}...`);
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + `Возвращаюсь в ${originalLocationNode}...`);
             ScriptState.isTrackingNode = true; // Re-enable location tracking after return
 
-            addToOverlayHistory(Config.CHARACTER_COPY_SUCCESSFUL_OVERLAY);
-            console.log("[NodeWatch - Joke]: userInit message sent to impersonate character.");
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + Config.CHARACTER_COPY_SUCCESSFUL_OVERLAY);
+            console.log(Config.LOG_PREFIX_JOKES + "userInit для подмены отправлен.");
 
 
 
 
         } else {
-            console.warn(`[NodeWatch - Joke]: Profile for user ID ${userId} not found.`);
-            addToOverlayHistory("[Joke]: Ошибка копирования.");
+            console.warn(Config.LOG_PREFIX_JOKES + `Профиль для ${userId} не найден.`);
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Ошибка копирования.");
             ScriptState.isTrackingNode = true; // Re-enable location tracking in case of error
         }
     };
 
-    /**
+        /**
      * Handles the "Return Original Character" joke button click.
      */
     window.returnOriginalCharacterJoke = function() {
         if (!originalUserInitData) {
-            console.warn("[NodeWatch - Joke]: Original userInit data not available.");
-            addToOverlayHistory("[Joke]: Нет данных об изначальном персонаже.");
+            console.warn(Config.LOG_PREFIX_JOKES + "Оригинальный userInit недоступен.");
+            addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Нет данных об изначальном персонаже.");
             return;
         }
         if (!lastVisitedNode) {
-            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
-            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            addToOverlayHistory(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
             return;
         }
 
         closeCharacterListPopup(); // Close the popup after clicking "Return Original Character"
-        addToOverlayHistory("[Joke]: Возвращаю изначального персонажа...");
-        console.log("[NodeWatch - Joke]: Returning to original character.");
-        console.log("[NodeWatch - Joke]: Sending original userInit message:", originalUserInitData); // Debug log
+        addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Возвращаю изначального персонажа...");
+        console.log(Config.LOG_PREFIX_JOKES + "Возвращаю изначального персонажа.");
+        console.log(Config.LOG_PREFIX_JOKES + "Отправляем оригинальный userInit:", originalUserInitData); // Debug log
 
         const bunkerNode = "int_bunker"; // Temporary node
         const originalLocationNode = lastVisitedNode; // Store original location
@@ -1004,7 +1013,7 @@ function createWebsocketSender() {
             "node": bunkerNode
         };
         currentWs.send(JSON.stringify(goToBunkerMessage));
-        addToOverlayHistory(`[NodeWatch - Joke]: Перемещаюсь в ${bunkerNode} для смены персонажа...`);
+        addToOverlayHistory(Config.LOG_PREFIX_JOKES + `Перемещаюсь в ${bunkerNode} для смены персонажа...`);
 
 
         const userInitMessage = {
@@ -1024,7 +1033,7 @@ function createWebsocketSender() {
         // Send updatePlayerState after returning to original - using original state
         const updateStateMessage = { "reason": "updatePlayerState", "state": "watching" };
         currentWs.send(JSON.stringify(updateStateMessage));
-        console.log("[NodeWatch - Joke]: Sending updatePlayerState message:", updateStateMessage);
+        console.log(Config.LOG_PREFIX_JOKES + "Отправляем updatePlayerState:", updateStateMessage);
 
         const returnToOriginalLocationMessage = {
             "reason": "roomChange",
@@ -1032,11 +1041,11 @@ function createWebsocketSender() {
             "node": originalLocationNode
         };
         currentWs.send(JSON.stringify(returnToOriginalLocationMessage));
-        addToOverlayHistory(`[NodeWatch - Joke]: Возвращаюсь в ${originalLocationNode}...`);
+        addToOverlayHistory(Config.LOG_PREFIX_JOKES + `Возвращаюсь в ${originalLocationNode}...`);
 
 
-        addToOverlayHistory("[Joke]: Изначальный персонаж восстановлен!");
-        console.log("[NodeWatch - Joke]: Original userInit message sent.");
+        addToOverlayHistory(Config.LOG_PREFIX_JOKES + "Изначальный персонаж восстановлен!");
+        console.log(Config.LOG_PREFIX_JOKES + "Оригинальный userInit отправлен.");
     }
 
 
@@ -1281,7 +1290,7 @@ function createWebsocketSender() {
         }
     }
 
-    /**
+        /**
      * Handles nodeUsers messages to update user information, including local_id.
      */
     function handleNodeUsers(usersData) {
@@ -1293,7 +1302,7 @@ function createWebsocketSender() {
                 user.local_id = user.local_id || "N/A"; // Ensure local_id is stored, default to "N/A" if missing
                 userMap[user.id] = user.name;
                 ScriptState.locationUsers[user.id] = user; // Store full user profile including local_id
-                console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}, Local ID: ${user.local_id}) добавлен в userMap и locationUsers.`);
+                console.log(Config.LOG_PREFIX_USER_EVENTS + `Пользователь ${user.name} (ID: ${user.id}, Local ID: ${user.local_id}) добавлен в userMap и locationUsers.`);
             }
         });
         rerenderCharacterListPopup(); // Update character list popup
@@ -1365,23 +1374,23 @@ function createWebsocketSender() {
         }
     }
 
-    /**
+        /**
      * Starts the "Find RP (test)" analysis.
      */
     function startRPTestAnalysis() {
         if (isRPTestRunning) {
-            console.log(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
-            addToOverlayHistory(Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
+            console.log(Config.LOG_PREFIX_RP_ANALYSIS + Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
+            addToOverlayHistory(Config.LOG_PREFIX_RP_ANALYSIS + Config.LOCATION_ANALYSIS_ALREADY_RUNNING);
             return;
         }
         if (!myInitiatorId) {
-            console.log(Config.INITIATOR_ID_NOT_RECEIVED);
-            addToOverlayHistory(Config.INITIATOR_ID_NOT_RECEIVED);
+            console.log(Config.LOG_PREFIX_GENERAL + Config.INITIATOR_ID_NOT_RECEIVED);
+            addToOverlayHistory(Config.LOG_PREFIX_GENERAL + Config.INITIATOR_ID_NOT_RECEIVED);
             return;
         }
         if (!lastVisitedNode) {
-            addToOverlayHistory(Config.WARNING_NO_CURRENT_LOCATION);
-            console.warn(Config.WARNING_NO_CURRENT_LOCATION);
+            addToOverlayHistory(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
+            console.warn(Config.LOG_PREFIX_GENERAL + Config.WARNING_NO_CURRENT_LOCATION);
             return;
         }
 
@@ -1390,8 +1399,8 @@ function createWebsocketSender() {
         isRPTestRunning = true;
         rpTestResults = {};
         expectedResponsesCount = nodeList.length;
-        addToOverlayHistory("Идет поиск РП...");
-        console.log("[NodeWatch - RP Test]: Starting RP Test Analysis...");
+        addToOverlayHistory(Config.LOG_PREFIX_RP_ANALYSIS + "Идет поиск РП...");
+        console.log(Config.LOG_PREFIX_RP_ANALYSIS + "Идет поиск РП...");
 
         // Send roomChange requests for all nodes immediately
         nodeList.forEach(node => {
@@ -1401,15 +1410,15 @@ function createWebsocketSender() {
                 "node": node
             };
             currentWs.send(JSON.stringify(roomChangeMessage));
-            console.log(`[NodeWatch - RP Test]: Sent roomChange for node: ${node}`);
+            console.log(Config.LOG_PREFIX_RP_ANALYSIS + `Отправлен roomChange для: ${node}`);
         });
     }
 
-    /**
+        /**
      * Analyzes the results of the "Find RP (test)" and displays them in a popup.
      */
     function analyzeRPTestResults() {
-        console.log("[NodeWatch - RP Test]: Analyzing RP Test Results...");
+        console.log(Config.LOG_PREFIX_RP_ANALYSIS + "Результаты поиска РП...");
         const sortedLocations = Object.entries(rpTestResults)
             .map(([node, users]) => [node, users.filter(user => user.id !== myInitiatorId)])
             .filter(([, users]) => users.length > 0)
@@ -1446,13 +1455,13 @@ function createWebsocketSender() {
                 "node": nodeBeforeRPTest
             };
             currentWs.send(JSON.stringify(returnRoomChangeMessage));
-            addToOverlayHistory(`${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
+            addToOverlayHistory(Config.LOG_PREFIX_NAVIGATION + `${Config.RETURN_TO_LAST_LOCATION_PREFIX} ${nodeBeforeRPTest}`);
             nodeBeforeRPTest = null;
         }
     }
 
 
-    window.WebSocket = function(url, protocols) {
+        window.WebSocket = function(url, protocols) {
         currentWs = new originalWebSocket(url, protocols);
         const ws = currentWs;
         const originalSend = ws.send.bind(ws);
@@ -1463,12 +1472,12 @@ function createWebsocketSender() {
                 if (data.reason === 'userInit') {
                     if (!originalUserInitData) { // Capture only the first userInit
                         originalUserInitData = data;
-                        console.log('[NodeWatch WebSocket Listener]: Original userInit data captured:', originalUserInitData);
+                        console.log(Config.LOG_PREFIX_WEBSOCKET + 'Оригинальный userInit захвачен:', originalUserInitData);
                     }
                 }
                 if (data.reason === 'roomChange' && data.initiator === myInitiatorId && ScriptState.isTrackingNode) {
                     lastVisitedNode = data.node;
-                    console.log(`[NodeWatch WebSocket Listener]: Last visited node запомнен: ${lastVisitedNode}`);
+                    console.log(Config.LOG_PREFIX_NAVIGATION + `Last visited node запомнен: ${lastVisitedNode}`);
                     if (currentNodeDisplay) {
                         currentNodeDisplay.textContent = `${Config.CURRENT_NODE_TEXT_PREFIX} ${lastVisitedNode}`;
                     }
@@ -1479,8 +1488,8 @@ function createWebsocketSender() {
 
 
         ws.addEventListener('open', () => {
-            console.log('[NodeWatch WebSocket Listener]: WebSocket соединение установлено для URL:', url);
-            addToOverlayHistory(Config.WEBSocket_CONNECTION_ESTABLISHED);
+            console.log(Config.LOG_PREFIX_WEBSOCKET + 'WebSocket соединение установлено для URL:', url);
+            addToOverlayHistory(Config.LOG_PREFIX_WEBSOCKET + Config.WEBSocket_CONNECTION_ESTABLISHED);
             clearOverlayInitialMessage();
             analyzeButton.style.display = 'block';
             goToNodeContainer.style.display = 'flex';
@@ -1490,7 +1499,7 @@ function createWebsocketSender() {
                 const chatInput = document.querySelector('#chat-input');
                 if (chatInput) {
                     chatInput.setAttribute('maxlength', '2000');
-                    console.log('NodeWatch: Chat input maxlength увеличен до 2000');
+                    console.log(Config.LOG_PREFIX_GENERAL + 'Длина сообщений в чате увеличена до 2000');
                     clearInterval(chatInputInterval);
                 }
             }, 1000); // Check every 1 second
@@ -1504,7 +1513,7 @@ function createWebsocketSender() {
                 } catch (e) {
                     if (typeof event.data === 'string') {
                         myInitiatorId = event.data;
-                        console.log('[NodeWatch WebSocket Listener]: Initiator ID captured:', myInitiatorId);
+                        console.log(Config.LOG_PREFIX_WEBSOCKET + 'Initiator ID захвачен:', myInitiatorId);
                         isFirstMessage = false;
                         return;
                     }
@@ -1520,7 +1529,7 @@ function createWebsocketSender() {
                     const chatSenderId = getUserIdByLocalId(chatLocalId);
 
                     if (chatSenderId && ScriptState.mutedUserIds.includes(chatSenderId)) {
-                        console.log(`[NodeWatch - Mute Panel]: Blocked message from muted user with local_id: ${chatLocalId}, user_id: ${chatSenderId}`);
+                        console.log(Config.LOG_PREFIX_MUTE_PANEL + `Заблокированное сообщение от замьючённого пользователя: ${chatLocalId}, user_id: ${chatSenderId}`);
                         // --- CHANGE: Modify event.data to prevent chat message processing ---
                         event.stopImmediatePropagation(); // Stop further message processing
                         event.preventDefault();
@@ -1536,23 +1545,23 @@ function createWebsocketSender() {
                     const userName = data.user.name;
                     const userId = data.user.id;
                     userMap[userId] = userName;
-                    console.log('[NodeWatch WebSocket Listener - Обнаружено userJoin сообщение. Пользователь:', userName, 'ID:', userId);
-                    addToOverlayHistory(`${Config.USER_JOIN_MESSAGE_PREFIX} ${userName}`);
+                    console.log(Config.LOG_PREFIX_USER_EVENTS + 'Обнаружено userJoin сообщение. Пользователь:', userName, 'ID:', userId);
+                    addToOverlayHistory(Config.LOG_PREFIX_USER_EVENTS + `${Config.USER_JOIN_MESSAGE_PREFIX} ${userName}`);
 
                 } else if (data.reason === 'userLeft' && data.initiator && data.initiator !== myInitiatorId) {
                     handleUserLeft(data.initiator); // Call handleUserLeft to update lists
                     const userIdLeft = data.initiator;
                     const userNameLeft = userMap[userIdLeft];
-                    console.log('[NodeWatch WebSocket Listener - Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
+                    console.log(Config.LOG_PREFIX_USER_EVENTS + 'Обнаружено userLeft сообщение. Пользователь:', userNameLeft ? userNameLeft : 'ID: ' + userIdLeft, 'ID:', userIdLeft);
 
                     const overlayMessage = userNameLeft ? `${Config.USER_LEFT_MESSAGE_PREFIX} ${userNameLeft}` : `${Config.USER_LEFT_MESSAGE_PREFIX} ID: ${userIdLeft}`;
-                    addToOverlayHistory(overlayMessage);
+                    addToOverlayHistory(Config.LOG_PREFIX_USER_EVENTS + overlayMessage);
                     delete userMap[userIdLeft];
                     delete ScriptState.locationUsers[userIdLeft]; // Remove from location users as well
 
                 } else if (data.reason === 'nodeUsers') {
                     handleNodeUsers(data.users);
-                    console.log('[NodeWatch WebSocket Listener - Обнаружено nodeUsers сообщение. Обновление userMap и locationUsers.');
+                    console.log(Config.LOG_PREFIX_USER_EVENTS + 'Обнаружено nodeUsers сообщение. Обновление userMap и locationUsers.');
 
                     // Clear current location users data before updating from nodeUsers
                     ScriptState.locationUsers = {};
@@ -1561,7 +1570,7 @@ function createWebsocketSender() {
                         if (user.id && user.name && user.id !== myInitiatorId) {
                             userMap[user.id] = user.name;
                             ScriptState.locationUsers[user.id] = user; // Store full user profile
-                            console.log(`[NodeWatch WebSocket Listener - nodeUsers]: Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.`);
+                            console.log(Config.LOG_PREFIX_USER_EVENTS + `Пользователь ${user.name} (ID: ${user.id}) добавлен в userMap и locationUsers.`);
                         }
                     });
                     rerenderCharacterListPopup(); // Update character list popup
@@ -1576,24 +1585,24 @@ function createWebsocketSender() {
                                     rpTestResults[nodeName] = data.users;
                                     expectedResponsesCount--;
 
-                                    console.log(`[NodeWatch - RP Test]: Received nodeUsers for node: ${nodeName}, remaining responses: ${expectedResponsesCount}`);
+                                    console.log(Config.LOG_PREFIX_RP_ANALYSIS + `Полученный nodeUsers для: ${nodeName}, осталось запросов: ${expectedResponsesCount}`);
 
                                     if (expectedResponsesCount === 0) {
-                                        console.log("[NodeWatch - RP Test]: All nodeUsers responses received. Starting analysis.");
+                                        console.log(Config.LOG_PREFIX_RP_ANALYSIS + "Все nodeUsers получены. Начинаю анализ.");
                                         isRPTestRunning = false;
-                                        addToOverlayHistory("Поиск РП завершен.");
+                                        addToOverlayHistory(Config.LOG_PREFIX_RP_ANALYSIS + "Поиск РП завершен.");
                                         analyzeRPTestResults();
                                     }
                                 } else {
-                                    console.warn(`[NodeWatch - RP Test]: Duplicate nodeUsers response received for node: ${nodeName}. Ignoring.`);
+                                    console.warn(Config.LOG_PREFIX_RP_ANALYSIS + `Копия nodeUsers получена для: ${nodeName}. Игнорируем.`);
                                 }
                             } else {
-                                console.warn("[NodeWatch - RP Test]: Invalid nodeUsers response format or no users in response to determine node.", event.data);
+                                console.warn(Config.LOG_PREFIX_RP_ANALYSIS + "Неверный nodeUsers или нет пользователей в ответе.", event.data);
                                 expectedResponsesCount--;
                                 if (expectedResponsesCount < 0) expectedResponsesCount = 0;
                                 if (expectedResponsesCount === 0) {
                                     isRPTestRunning = false;
-                                    addToOverlayHistory("Поиск РП завершен.");
+                                    addToOverlayHistory(Config.LOG_PREFIX_RP_ANALYSIS + "Поиск РП завершен.");
                                     analyzeRPTestResults();
                                 }
                             }
@@ -1601,14 +1610,14 @@ function createWebsocketSender() {
                     }
                 }
             } catch (e) {
-                console.error('[NodeWatch WebSocket Listener]: Ошибка обработки JSON сообщения:', e, event.data);
-                addToOverlayHistory("WebSocket: Ошибка данных");
+                console.error(Config.LOG_PREFIX_WEBSOCKET + 'Ошибка обработки JSON сообщения:', e, event.data);
+                addToOverlayHistory(Config.LOG_PREFIX_WEBSOCKET + "WebSocket: Ошибка данных");
             }
         });
 
         ws.addEventListener('close', () => {
-            console.log('[NodeWatch WebSocket Listener]: WebSocket соединение закрыто для URL:', url);
-            addToOverlayHistory(Config.WEBSocket_CONNECTION_CLOSED);
+            console.log(Config.LOG_PREFIX_WEBSOCKET + 'WebSocket соединение закрыто для URL:', url);
+            addToOverlayHistory(Config.LOG_PREFIX_WEBSOCKET + Config.WEBSocket_CONNECTION_CLOSED);
             clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
@@ -1617,8 +1626,8 @@ function createWebsocketSender() {
         });
 
         ws.addEventListener('error', (error) => {
-            console.error('[NodeWatch WebSocket Listener]: Ошибка WebSocket для URL:', url, error);
-            addToOverlayHistory(Config.WEBSocket_CONNECTION_ERROR);
+            console.error(Config.LOG_PREFIX_WEBSOCKET + 'Ошибка WebSocket для URL:', url, error);
+            addToOverlayHistory(Config.LOG_PREFIX_WEBSOCKET + Config.WEBSocket_CONNECTION_ERROR);
             clearOverlayInitialMessage();
             ScriptState.isAnalyzing = false;
             ScriptState.isTrackingNode = false;
